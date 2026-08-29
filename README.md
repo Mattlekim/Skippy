@@ -73,6 +73,21 @@ You have two complementary paths:
 
 For running the game *natively* on the phone, use the Android build.
 
+## World engine
+
+Skippy is an isometric, Age-of-Empires-II-style world: chunked and effectively
+**infinite**, with stepped terrain **height**, **biomes** derived from temperature
+and moisture (and **height cools temperature**, so mountains turn cold), and
+**vegetation** that follows the climate.
+
+![Skippy world](docs/world-preview.png)
+
+It's built around a `World` base class that owns the whole map — its generator,
+loaded chunks, camera, and its own update + render. The full design (chunk
+streaming, the climate/biome model, the isometric renderer, and how to extend it)
+is in **[docs/WORLD.md](docs/WORLD.md)**. Controls: arrows/WASD or drag to pan,
+mouse wheel to zoom.
+
 ## Claude Code on the web
 
 `.claude/hooks/session-start.sh` (a SessionStart hook) installs the .NET 8 SDK
