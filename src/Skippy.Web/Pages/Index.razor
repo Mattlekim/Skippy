@@ -1,0 +1,12 @@
+@page "/"
+@page "/index.html"
+@namespace Skippy.Web.Pages
+@inject IJSRuntime JsRuntime
+
+<PageTitle>Skippy</PageTitle>
+
+@* KNI's JS (initRenderJS in index.html) sizes #theCanvas to #canvasHolder and
+   drives the frame loop. Both ids must match index.html. *@
+<div id="canvasHolder">
+    <canvas id="theCanvas" style="touch-action:none;"></canvas>
+</div>

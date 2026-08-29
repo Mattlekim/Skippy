@@ -7,12 +7,10 @@
     Every NuGet version used anywhere in the solution is declared here once.
 
     IMPORTANT: the versions below are sensible, real starting points but they
-    WILL age. Before your first build, refresh them to the latest stable with:
-
-        dotnet nuget locals all --clear          # optional, clears cache
-        dotnet list package --outdated            # after a first restore
-
-    or just edit the numbers here. Because of Central Package Management you
+    WILL age. Before your first build, refresh them to the latest stable:
+    run "dotnet list package" with the outdated flag after a first restore to
+    see newer versions, then edit the numbers below. Because of Central Package
+    Management you
     only ever change a version in this one file.
 
     MonoGame        -> https://www.nuget.org/packages/MonoGame.Framework.DesktopGL

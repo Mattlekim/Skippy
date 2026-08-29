@@ -73,19 +73,30 @@ runs before any content exists.
 
 ## The browser build, in detail
 
-`Skippy.Web` is a Blazor WebAssembly app:
+`Skippy.Web` is a Blazor WebAssembly app. The KNI browser loop is JS-driven, so
+the wiring matters — this mirrors the official `kni-blazor-gl` template and is
+verified to render (see `docs/web-preview.png`):
 
-1. `Program.cs` boots the Blazor host, then creates and runs `SkippyGame`. Under
-   KNI, `Game.Run()` is non-blocking in the browser (driven by
-   `requestAnimationFrame`).
-2. `wwwroot/index.html` hosts the `<canvas>` KNI draws into and loads the Blazor
-   runtime.
-3. `dotnet publish` emits a fully static site (`wwwroot`) — host it anywhere
+1. `Program.cs` is vanilla Blazor — it does **not** start the game. It just
+   mounts the `App` router.
+2. `Pages/Index.razor` supplies `#canvasHolder` + `#theCanvas`. Its code-behind
+   (`Index.razor.cs`), on first render, hands a `DotNetObjectReference` to JS via
+   `initRenderJS`.
+3. `wwwroot/index.html` loads KNI's JS interop globals (`nkJSObject`, `nkCanvas`,
+   … from `_content/nkast.Wasm.*`) **before** the Blazor runtime, sizes the
+   canvas, then pumps `requestAnimationFrame → TickDotNet()` every frame.
+4. `TickDotNet()` lazily creates the shared `SkippyGame` (`_game.Run()`) and
+   ticks it once per frame (`_game.Tick()`).
+5. `dotnet publish` emits a fully static site (`wwwroot`) — host it anywhere
    (GitHub Pages, Netlify, S3, …). CI wires up GitHub Pages.
 
-Because KNI's Blazor bootstrap has shifted across versions, treat the current
-[KNI `BlazorGL` sample](https://github.com/kniEngine/kni) as the source of truth
-for the exact canvas id and start handshake if a KNI upgrade changes them. The
+Two version-coupled details to know when you upgrade KNI: the `_content/nkast.Wasm.*`
+JS filenames carry a version suffix (this pin uses `8.0.2`; newer KNI also moves
+`JSObject` to `_content/nkast.Wasm.JSInterop/`), and the `#theCanvas` / `initRenderJS`
+handshake comes from the current
+[`kni-blazor-gl` template](https://github.com/kniEngine/kni/tree/main/Templates/dotnetTemplates/content/BlazorGL.NetCore.CSharp).
+If the browser console reports a missing JS global after an upgrade, refresh the
+`<script>` paths in `index.html` to match the new `_content/` filenames. The
 architecture around it (shared Core, static publish, Pages deploy) is stable.
 
 ## Why these choices

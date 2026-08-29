@@ -2,7 +2,7 @@
 
   <!-- ==========================================================================
        PC head: Windows, Linux and macOS via MonoGame DesktopGL (OpenGL).
-       Run with:   dotnet run --project src/Skippy.Desktop
+       Run:  cd src/Skippy.Desktop  &&  dotnet run
        ========================================================================== -->
 
   <PropertyGroup>

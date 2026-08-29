@@ -4,7 +4,7 @@
        Web head: runs the SAME MonoGame/XNA game code in the browser via KNI
        (nkast.Xna.Framework) compiled to WebAssembly + WebGL.
 
-       Local preview:   dotnet run --project src/Skippy.Web
+       Local preview:   cd src/Skippy.Web  &&  dotnet run
                         (then open the printed http://localhost:xxxx URL —
                          also reachable from your phone on the same network)
        Publish static:  dotnet publish src/Skippy.Web -c Release

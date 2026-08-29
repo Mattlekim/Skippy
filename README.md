@@ -13,6 +13,12 @@ All game logic lives once in **`src/Skippy.Core`** and is compiled into each
 head. You write the game against the standard `Microsoft.Xna.Framework` API and
 it runs everywhere.
 
+The browser head is real, not aspirational — here is the shared game code
+compiled to WebAssembly and running via KNI/WebGL (captured from a headless
+browser loading the published build):
+
+![Skippy running in the browser](docs/web-preview.png)
+
 > **Why KNI for the browser?** Stock MonoGame has no stable browser target. KNI
 > is an API-compatible MonoGame fork that keeps the exact same
 > `Microsoft.Xna.Framework` namespace but adds a real Blazor WebAssembly + WebGL
@@ -66,6 +72,17 @@ You have two complementary paths:
    your change.
 
 For running the game *natively* on the phone, use the Android build.
+
+## Claude Code on the web
+
+`.claude/hooks/session-start.sh` (a SessionStart hook) installs the .NET 8 SDK
+and warms the NuGet/MGCB caches automatically when a web session starts, so the
+Desktop and Web heads build without manual setup. It installs the SDK via the
+Ubuntu apt archive (reachable even when Microsoft's own download hosts are
+blocked by an egress policy), falling back to Microsoft's installer script. The
+Android head additionally needs `dotnet workload install android` (~1 GB), left
+out of the hook by design. Once this is merged to your default branch, all
+future web sessions pick it up.
 
 ## Content / assets
 
