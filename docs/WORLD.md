@@ -6,9 +6,9 @@ follows the climate. Everything lives in `src/Skippy.Core/Worlds/`.
 
 ![Skippy world](world-preview.png)
 
-*Coast → temperate broadleaf forest → taiga on the cooler high ground, with
-stepped cliff terraces. The pine belt appears where elevation has cooled the
-land — height driving temperature driving biome.*
+*Coast → temperate broadleaf forest → taiga on the cooler high ground, the
+terrain sloping smoothly between elevations. The pine belt appears where
+elevation has cooled the land — height driving temperature driving biome.*
 
 ## The `World` base class
 
@@ -94,13 +94,14 @@ so on. Water and beaches stay clear.
 ## Isometric rendering
 
 `WorldRenderer` draws the visible tiles in painter's order along screen diagonals.
-All art is **generated at runtime** (a diamond, a disc, a triangle, a pixel), so
-the world renders with no content-pipeline assets. Each tile is:
 
-- a **diamond top**, tinted by biome and brightened with elevation;
-- **cliff faces** filling the drop from the top down to whichever front neighbor
-  is lower (so only real height differences cost draws);
-- **vegetation** stamped on top.
+Terrain is **smooth, Age-of-Empires-II-style**: elevation lives at tile *corners*,
+so each tile is a four-corner quad that ramps between its neighbors instead of
+stepping with vertical cliffs. Shared corners use the same level, so the surface
+stays seamless. Tiles are drawn as colored triangles (two per tile) through a
+`BasicEffect`; each is tinted by biome and brightened by its average corner
+elevation. Vegetation is then stamped on top with a `SpriteBatch`, using
+runtime-generated art (a disc, a triangle, a pixel) — no content-pipeline assets.
 
 `Iso` holds the 2:1 projection (`TileToIso` / `IsoToTile`); `Camera` tracks a
 focus point in world-tile space plus zoom, so it stays put as chunks stream.

@@ -55,6 +55,11 @@ public struct Tile
     public Vegetation Vegetation;
 
     public readonly bool IsWater => Biome is Biome.Ocean or Biome.ShallowWater;
+
+    /// <summary>Temperature expressed in degrees Celsius (from the normalized 0..1 field).</summary>
+    public readonly float TemperatureCelsius =>
+        WorldConstants.TempMinCelsius
+        + Temperature * (WorldConstants.TempMaxCelsius - WorldConstants.TempMinCelsius);
 }
 
 /// <summary>Tunable constants for terrain shaping and the isometric look.</summary>
@@ -74,4 +79,8 @@ public static class WorldConstants
 
     /// <summary>How strongly altitude cools temperature (per unit of height above sea).</summary>
     public const float TemperatureLapse = 0.9f;
+
+    /// <summary>Degrees Celsius that the normalized temperature field maps to (0 → min, 1 → max).</summary>
+    public const float TempMinCelsius = -20f;
+    public const float TempMaxCelsius = 45f;
 }
