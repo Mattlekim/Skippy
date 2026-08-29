@@ -31,6 +31,18 @@ public sealed class InputState
     public bool ExitRequested { get; private set; }
     public bool ToggleFullscreenRequested { get; private set; }
 
+    /// <summary>True only on the frame the tile-grid overlay key (G) goes down.</summary>
+    public bool ToggleTileGridRequested { get; private set; }
+
+    /// <summary>-1 while [ is held, +1 while ] is held: shrink / grow the tiles. 0 otherwise.</summary>
+    public int TileSizeDirection { get; private set; }
+
+    /// <summary>True only on the frame the map-view key (M) goes down.</summary>
+    public bool CycleMapViewRequested { get; private set; }
+
+    /// <summary>-1 while , is held, +1 while . is held: narrow / widen the rivers. 0 otherwise.</summary>
+    public int RiverWidthDirection { get; private set; }
+
     private KeyboardState _prevKeyboard;
     private Vector2 _prevPointer;
     private bool _prevPointerDown;
@@ -52,6 +64,23 @@ public sealed class InputState
         ExitRequested = keyboard.IsKeyDown(Keys.Escape);
         ToggleFullscreenRequested =
             keyboard.IsKeyDown(Keys.F11) && _prevKeyboard.IsKeyUp(Keys.F11);
+        ToggleTileGridRequested =
+            keyboard.IsKeyDown(Keys.G) && _prevKeyboard.IsKeyUp(Keys.G);
+        CycleMapViewRequested =
+            keyboard.IsKeyDown(Keys.M) && _prevKeyboard.IsKeyUp(Keys.M);
+
+        // Held, not edge-triggered: the world applies its own press-and-repeat.
+        int tileDir = 0;
+        if (keyboard.IsKeyDown(Keys.OemOpenBrackets)) tileDir -= 1;
+        if (keyboard.IsKeyDown(Keys.OemCloseBrackets)) tileDir += 1;
+        TileSizeDirection = tileDir;
+
+        int riverDir = 0;
+        if (keyboard.IsKeyDown(Keys.OemComma)) riverDir -= 1;
+        if (keyboard.IsKeyDown(Keys.OemPeriod)) riverDir += 1;
+        RiverWidthDirection = riverDir;
+
+
         _prevKeyboard = keyboard;
 
         // Prefer touch (phones / touch laptops); fall back to the mouse.

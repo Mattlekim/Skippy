@@ -5,6 +5,58 @@ namespace Skippy.Core.Worlds.Biomes;
 /// <summary>Presentation data for biomes: the base surface color used to tint tiles.</summary>
 public static class BiomeRegistry
 {
+    /// <summary>
+    /// The ground colour of one tile. Most biomes are a flat swatch, but grass is
+    /// not one green: it burns to straw where it is dry, deepens where it is wet,
+    /// and goes pale and olive where it is cold. Grassland and savanna are therefore
+    /// coloured from the tile's own climate, which keeps big open country from
+    /// reading as a single fill.
+    /// </summary>
+    public static Color SurfaceColor(in Tile tile) => tile.Biome switch
+    {
+        Biome.Grassland or Biome.Savanna => GrassColor(tile.Temperature, tile.Moisture),
+        Biome.Tundra => TundraColor(tile),
+        _ => TopColor(tile.Biome),
+    };
+
+    private static readonly Color SnowPatch = new(228, 234, 240);
+
+    /// <summary>
+    /// Snow lies on tundra in drifts, not as an even coat. The patch field decides
+    /// where it settles, and the colder the ground the lower the bar for it lying
+    /// at all — so the far north is mostly white and the fringe is mostly bare.
+    /// </summary>
+    private static Color TundraColor(in Tile tile)
+    {
+        float cold = Smooth01((0.24f - tile.Temperature) / 0.24f);
+        float threshold = 0.62f - 0.34f * cold;
+        return Color.Lerp(TopColor(Biome.Tundra), SnowPatch,
+                          Smooth01((tile.Patch - threshold) / 0.16f));
+    }
+
+    private static readonly Color DryGrass = new(206, 196, 88); // sun-bleached yellow
+    private static readonly Color LushGrass = new(84, 150, 66); // well-watered green
+
+    /// <summary>
+    /// Grass runs along a single green-to-yellow line, never off it. Water drives it
+    /// green; drought and heat both bleach it back towards yellow, so the colour
+    /// still answers to both climate fields without ever leaving the two-colour ramp.
+    /// </summary>
+    private static Color GrassColor(float temperature, float moisture)
+    {
+        float green = Smooth01((moisture - 0.15f) / 0.50f);
+        green *= 1f - 0.45f * Smooth01((temperature - 0.55f) / 0.40f);
+        return Color.Lerp(DryGrass, LushGrass, green);
+    }
+
+    /// <summary>Clamped smoothstep, so the ramps have no hard edge where they start.</summary>
+    private static float Smooth01(float t)
+    {
+        t = t < 0f ? 0f : t > 1f ? 1f : t;
+        return t * t * (3f - 2f * t);
+    }
+
+    /// <summary>The flat swatch for a biome, ignoring any per-tile climate variation.</summary>
     public static Color TopColor(Biome biome) => biome switch
     {
         Biome.Ocean           => new Color(28, 58, 110),

@@ -6,7 +6,9 @@
        ========================================================================== -->
 
   <PropertyGroup>
-    <OutputType>Exe</OutputType>
+    <!-- WinExe: no console window is created alongside the game on Windows
+         (and none lingers after the game closes). Plain Exe would open one. -->
+    <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <RollForward>Major</RollForward>
     <AssemblyName>Skippy</AssemblyName>
@@ -21,6 +23,15 @@
   <!-- Compile the shared game code (Skippy.Core) into this head. -->
   <ItemGroup>
     <Compile Include="..\Skippy.Core\**\*.cs" LinkBase="Skippy.Core" />
+  </ItemGroup>
+
+  <!-- The art sheets ride inside the assembly, so every head loads them the same
+       way and the browser build needs no file server. LogicalName is set explicitly
+       because the default is derived from the project's own namespace and folder,
+       which differs per head. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Skippy.Core\Assets\trees.png" LogicalName="Skippy.Assets.trees.png" />
+    <EmbeddedResource Include="..\Skippy.Core\Assets\bushes.png" LogicalName="Skippy.Assets.bushes.png" />
   </ItemGroup>
 
   <!-- Build the shared content pipeline and copy the .xnb into the output. -->

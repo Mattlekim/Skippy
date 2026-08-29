@@ -86,7 +86,8 @@ It's built around a `World` base class that owns the whole map — its generator
 loaded chunks, camera, and its own update + render. The full design (chunk
 streaming, the climate/biome model, the isometric renderer, and how to extend it)
 is in **[docs/WORLD.md](docs/WORLD.md)**. Controls: arrows/WASD or drag to pan,
-mouse wheel to zoom.
+mouse wheel to zoom, G to toggle the tile grid, `[` / `]` to resize tiles, `,` / `.`
+to resize rivers, M to cycle the map view (biome / height / temp / moisture).
 
 ## Claude Code on the web
 

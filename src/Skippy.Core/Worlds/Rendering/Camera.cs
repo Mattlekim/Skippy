@@ -15,7 +15,7 @@ public sealed class Camera
     public float Zoom = 0.8f;
 
     public const float MinZoom = 0.4f;
-    public const float MaxZoom = 4f;
+    public const float MaxZoom = 16f;
 
     public void PanTiles(Vector2 tileDelta) => FocusTile += tileDelta;
 

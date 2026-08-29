@@ -32,6 +32,12 @@
     <Compile Include="..\Skippy.Core\**\*.cs" LinkBase="Skippy.Core" />
   </ItemGroup>
 
+  <!-- Art sheets, embedded so every head loads them identically. -->
+  <ItemGroup>
+    <EmbeddedResource Include="..\Skippy.Core\Assets\trees.png" LogicalName="Skippy.Assets.trees.png" />
+    <EmbeddedResource Include="..\Skippy.Core\Assets\bushes.png" LogicalName="Skippy.Assets.bushes.png" />
+  </ItemGroup>
+
   <!-- Content is compiled to .xnb and packed as Android assets. -->
   <ItemGroup>
     <MonoGameContentReference Include="..\..\Content\Content.mgcb" />
