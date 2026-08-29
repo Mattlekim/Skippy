@@ -109,8 +109,12 @@ public sealed class WorldRenderer
                 Vector2 d = Corner(tx, ty + 1);
 
                 float avgLevel = (lA + lB + lC + lD) * 0.25f;
-                float shade = 0.82f + 0.30f * (avgLevel / WorldConstants.MaxLevel);
-                Color col = Scale(BiomeRegistry.TopColor(tile.Biome), shade);
+                float elevShade = 0.82f + 0.30f * (avgLevel / WorldConstants.MaxLevel);
+                // Slope lighting: faces whose north corner sits above the south catch light.
+                float slope = (lA - lC) + 0.4f * (lB - lD);
+                float slopeShade = Math.Clamp(1f + 0.05f * slope, 0.8f, 1.2f);
+                float jitter = 0.95f + 0.10f * Hash01(tx, ty); // break up flat color per tile
+                Color col = Scale(BiomeRegistry.TopColor(tile.Biome), elevShade * slopeShade * jitter);
 
                 PushTri(a, b, c, col);
                 PushTri(a, c, d, col);
@@ -261,6 +265,16 @@ public sealed class WorldRenderer
     private static float Min4(float a, float b, float c, float d) => MathF.Min(MathF.Min(a, b), MathF.Min(c, d));
     private static float Max4(float a, float b, float c, float d) => MathF.Max(MathF.Max(a, b), MathF.Max(c, d));
     private static int LevelAt(World world, int wx, int wy) => world.TryGetTile(wx, wy, out Tile t) ? t.Level : 0;
+
+    private static float Hash01(int x, int y)
+    {
+        unchecked
+        {
+            uint h = (uint)(x * 374761393 + y * 668265263);
+            h = (h ^ (h >> 13)) * 1274126177u;
+            return ((h ^ (h >> 16)) & 0xFFFF) / 65535f;
+        }
+    }
 
     private static Color Scale(Color c, float f) => new(
         (int)Math.Clamp(c.R * f, 0, 255),
