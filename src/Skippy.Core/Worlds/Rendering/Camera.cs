@@ -12,7 +12,7 @@ public sealed class Camera
     /// <summary>Point the view is centered on, in world-tile coordinates.</summary>
     public Vector2 FocusTile;
 
-    public float Zoom = 1.0f;
+    public float Zoom = 0.8f;
 
     public const float MinZoom = 0.4f;
     public const float MaxZoom = 4f;

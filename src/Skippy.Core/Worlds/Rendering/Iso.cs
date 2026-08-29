@@ -8,9 +8,9 @@ namespace Skippy.Core.Worlds.Rendering;
 /// </summary>
 public static class Iso
 {
-    public const int TileWidth = 32;
-    public const int TileHeight = 16;
-    public const int HeightStep = 7;
+    public const int TileWidth = 64;
+    public const int TileHeight = 32;
+    public const int HeightStep = 14;
 
     /// <summary>World tile (+ elevation level) → iso-space pixel (center of the diamond top).</summary>
     public static Vector2 TileToIso(float tileX, float tileY, float level) => new(

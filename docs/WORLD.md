@@ -86,10 +86,13 @@ Tune the thresholds in `BiomeClassifier`, and the sea/beach/snow lines in
 
 ### Vegetation follows climate
 
-`VegetationPicker` chooses per-tile vegetation from the biome plus a low-frequency
-density field (for clumping) and a per-tile hash (for fine variation): dense
-broadleaf/pine forests, scattered savanna trees, desert cactus, tundra shrubs, and
-so on. Water and beaches stay clear.
+Each tile carries a low-frequency **vegetation-density** field (its clumping
+value). At render time this drives an **Age-of-Empires-II-style scatter**: a tile
+places *many* individual plants (up to ~12) at randomized, deterministic
+positions within its quad — dense broadleaf/pine forests, scattered savanna
+trees, desert cactus, tundra shrubs — rather than one sprite per tile. Species
+come from the biome; water and beaches stay clear. (`VegetationPicker` still
+computes a single representative type per tile, handy for gameplay queries.)
 
 ## Isometric rendering
 

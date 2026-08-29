@@ -34,7 +34,16 @@ public sealed class WorldRenderer
     {
         public readonly Vector2 Pos;
         public readonly Vegetation Veg;
-        public VegItem(Vector2 pos, Vegetation veg) { Pos = pos; Veg = veg; }
+        public readonly float Scale;
+        public VegItem(Vector2 pos, Vegetation veg, float scale) { Pos = pos; Veg = veg; Scale = scale; }
+    }
+
+    /// <summary>Deterministic per-tile RNG for scattering plants (no heap allocation).</summary>
+    private struct XorShift
+    {
+        private uint _s;
+        public XorShift(uint seed) { _s = seed == 0 ? 1u : seed; }
+        public float Next() { _s ^= _s << 13; _s ^= _s >> 17; _s ^= _s << 5; return (_s & 0xFFFFFF) / 16777216f; }
     }
 
     public WorldRenderer(GraphicsDevice gd)
@@ -119,8 +128,7 @@ public sealed class WorldRenderer
                 PushTri(a, b, c, col);
                 PushTri(a, c, d, col);
 
-                if (tile.Vegetation != Vegetation.None)
-                    _veg.Add(new VegItem((a + b + c + d) * 0.25f, tile.Vegetation));
+                AppendScatter(tile, a, b, c, d, tx, ty);
             }
         }
 
@@ -143,9 +151,53 @@ public sealed class WorldRenderer
         // ---- vegetation pass (sprites) ----
         sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
         foreach (VegItem item in _veg)
-            DrawVegetation(sb, item.Pos, zoom, item.Veg);
+            DrawVegetation(sb, item.Pos, zoom * item.Scale, item.Veg);
         sb.End();
     }
+
+    /// <summary>
+    /// AoE2-style vegetation: a tile scatters many individual plants at randomized,
+    /// deterministic positions within its quad (dense forests, sparse savanna),
+    /// their count driven by biome and the tile's vegetation-density field.
+    /// </summary>
+    private void AppendScatter(in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty)
+    {
+        var rng = new XorShift((uint)((tx * 73856093) ^ (ty * 19349663) ^ 0x9e37));
+        float dens = tile.VegetationDensity;
+
+        void Add(Vegetation kind, int n)
+        {
+            if (n > 12) n = 12;
+            for (int i = 0; i < n; i++)
+            {
+                float u = 0.14f + 0.72f * rng.Next();
+                float v = 0.12f + 0.76f * rng.Next();
+                float s = 0.8f + 0.5f * rng.Next();
+                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s));
+            }
+        }
+
+        switch (tile.Biome)
+        {
+            case Biome.TemperateForest: Add(Vegetation.BroadleafTree, 5 + Ri(dens * 6)); Add(Vegetation.Bush, Ri(dens * 2)); break;
+            case Biome.Taiga: Add(Vegetation.PineTree, 5 + Ri(dens * 6)); if (rng.Next() > 0.7f) Add(Vegetation.Bush, 1); break;
+            case Biome.Jungle: Add(Vegetation.PalmTree, 6 + Ri(dens * 6)); Add(Vegetation.Bush, 1 + Ri(dens * 2)); break;
+            case Biome.Grassland:
+                if (dens > 0.5f) Add(Vegetation.BroadleafTree, 1 + Ri((dens - 0.5f) * 6));
+                if (dens > 0.35f && rng.Next() > 0.5f) Add(Vegetation.Bush, 1);
+                break;
+            case Biome.Savanna: if (dens > 0.55f) Add(Vegetation.BroadleafTree, dens > 0.8f ? 2 : 1); break;
+            case Biome.Swamp: Add(Vegetation.Bush, 1 + Ri(dens * 3)); if (dens > 0.6f) Add(Vegetation.BroadleafTree, 1); break;
+            case Biome.Tundra: if (dens > 0.6f || rng.Next() > 0.75f) Add(Vegetation.Bush, 1); break;
+            case Biome.Desert: if (dens > 0.7f) Add(Vegetation.Cactus, dens > 0.88f ? 2 : 1); break;
+            case Biome.Rock: if (rng.Next() > 0.6f) Add(Vegetation.Rock, rng.Next() > 0.6f ? 2 : 1); break;
+        }
+    }
+
+    private static int Ri(float x) => (int)MathF.Round(x);
+
+    private static Vector2 Bilerp(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float u, float v)
+        => Vector2.Lerp(Vector2.Lerp(a, b, u), Vector2.Lerp(d, c, u), v);
 
     private void PushTri(Vector2 p0, Vector2 p1, Vector2 p2, Color color)
     {
@@ -158,6 +210,22 @@ public sealed class WorldRenderer
 
     private void DrawVegetation(SpriteBatch sb, Vector2 at, float zoom, Vegetation veg)
     {
+        // Far zoom: a cheap dot keeps big, plant-dense views fast.
+        if (zoom < 0.35f)
+        {
+            Color lc = veg switch
+            {
+                Vegetation.PineTree => new Color(46, 96, 60),
+                Vegetation.PalmTree => new Color(90, 168, 84),
+                Vegetation.BroadleafTree or Vegetation.Bush => new Color(64, 120, 60),
+                Vegetation.Cactus => new Color(80, 124, 80),
+                Vegetation.Rock => new Color(120, 116, 112),
+                _ => new Color(96, 140, 74),
+            };
+            Disc(sb, at - new Vector2(0f, 2f * zoom), MathF.Max(1.3f, 2.4f * zoom), lc);
+            return;
+        }
+
         switch (veg)
         {
             case Vegetation.GrassTuft:

@@ -65,6 +65,8 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
                     Moisture = moisture,
                     Level = QuantizeLevel(h),
                     Biome = BiomeClassifier.Classify(h, temperature, moisture),
+                    // Low-frequency clumping field: how densely this tile is planted.
+                    VegetationDensity = _vegetation.Sample(wx * 0.06f, wy * 0.06f) * 0.5f + 0.5f,
                 };
                 tile.Vegetation = VegetationPicker.Pick(tile, _vegetation, wx, wy);
 

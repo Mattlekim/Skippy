@@ -51,6 +51,9 @@ public struct Tile
     /// <summary>Moisture / wetness 0..1.</summary>
     public float Moisture;
 
+    /// <summary>Vegetation clumping field 0..1 — drives how many plants a tile scatters.</summary>
+    public float VegetationDensity;
+
     public Biome Biome;
     public Vegetation Vegetation;
 
