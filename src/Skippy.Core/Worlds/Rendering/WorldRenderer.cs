@@ -123,10 +123,18 @@ public sealed class WorldRenderer
                 float slope = (lA - lC) + 0.4f * (lB - lD);
                 float slopeShade = Math.Clamp(1f + 0.05f * slope, 0.8f, 1.2f);
                 float jitter = 0.95f + 0.10f * Hash01(tx, ty); // break up flat color per tile
-                Color col = Scale(BiomeRegistry.TopColor(tile.Biome), elevShade * slopeShade * jitter);
+                float shadeF = elevShade * slopeShade * jitter;
 
-                PushTri(a, b, c, col);
-                PushTri(a, c, d, col);
+                // Blend each corner across the biomes meeting there; per-vertex colors
+                // let the GPU interpolate a smooth transition with no hard tile edges.
+                Color baseCol = BiomeRegistry.TopColor(tile.Biome);
+                Color cA = Scale(BlendCorner(world, tx, ty, baseCol), shadeF);
+                Color cB = Scale(BlendCorner(world, tx + 1, ty, baseCol), shadeF);
+                Color cC = Scale(BlendCorner(world, tx + 1, ty + 1, baseCol), shadeF);
+                Color cD = Scale(BlendCorner(world, tx, ty + 1, baseCol), shadeF);
+
+                PushTri(a, cA, b, cB, c, cC);
+                PushTri(a, cA, c, cC, d, cD);
 
                 AppendScatter(tile, a, b, c, d, tx, ty);
             }
@@ -199,13 +207,30 @@ public sealed class WorldRenderer
     private static Vector2 Bilerp(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float u, float v)
         => Vector2.Lerp(Vector2.Lerp(a, b, u), Vector2.Lerp(d, c, u), v);
 
-    private void PushTri(Vector2 p0, Vector2 p1, Vector2 p2, Color color)
+    private void PushTri(Vector2 p0, Color c0, Vector2 p1, Color c1, Vector2 p2, Color c2)
     {
         if (_vertCount + 3 > _verts.Length)
             Array.Resize(ref _verts, _verts.Length * 2);
-        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p0, 0f), color);
-        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p1, 0f), color);
-        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p2, 0f), color);
+        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p0, 0f), c0);
+        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p1, 0f), c1);
+        _verts[_vertCount++] = new VertexPositionColor(new Vector3(p2, 0f), c2);
+    }
+
+    private static readonly (int dx, int dy)[] CornerOff = { (-1, -1), (0, -1), (-1, 0), (0, 0) };
+
+    /// <summary>Average the biome colors of the (up to four) tiles meeting at a vertex.</summary>
+    private static Color BlendCorner(World world, int vx, int vy, Color fallback)
+    {
+        int r = 0, g = 0, b = 0, n = 0;
+        foreach ((int dx, int dy) in CornerOff)
+        {
+            if (world.TryGetTile(vx + dx, vy + dy, out Tile t))
+            {
+                Color c = BiomeRegistry.TopColor(t.Biome);
+                r += c.R; g += c.G; b += c.B; n++;
+            }
+        }
+        return n == 0 ? fallback : new Color(r / n, g / n, b / n);
     }
 
     private void DrawVegetation(SpriteBatch sb, Vector2 at, float zoom, Vegetation veg)

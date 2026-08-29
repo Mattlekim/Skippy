@@ -102,8 +102,14 @@ Terrain is **smooth, Age-of-Empires-II-style**: elevation lives at tile *corners
 so each tile is a four-corner quad that ramps between its neighbors instead of
 stepping with vertical cliffs. Shared corners use the same level, so the surface
 stays seamless. Tiles are drawn as colored triangles (two per tile) through a
-`BasicEffect`; each is tinted by biome and brightened by its average corner
-elevation. Vegetation is then stamped on top with a `SpriteBatch`, using
+`BasicEffect`.
+
+**Biome edges blend, with no hard tile borders.** Each corner is colored by
+averaging the biomes of the (up to four) tiles meeting there, and those colors
+are assigned per-vertex so the GPU interpolates a smooth gradient across the
+quad — grass fades into sand, and the shoreline softens from deep water through
+shallows to wet sand. Per-tile elevation and slope-lighting shading is folded in
+before the blend. Vegetation is then stamped on top with a `SpriteBatch`, using
 runtime-generated art (a disc, a triangle, a pixel) — no content-pipeline assets.
 
 `Iso` holds the 2:1 projection (`TileToIso` / `IsoToTile`); `Camera` tracks a
