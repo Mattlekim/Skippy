@@ -1,0 +1,40 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ==========================================================================
+       Android head: MonoGame.Framework.Android.
+       Requires the Android workload:  dotnet workload install android
+       Build an APK:   dotnet build src/Skippy.Android -c Release -f net8.0-android
+       Deploy to a connected device/emulator:
+                       dotnet build src/Skippy.Android -t:Run -f net8.0-android
+       ========================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-android</TargetFramework>
+    <SupportedOSPlatformVersion>21</SupportedOSPlatformVersion>
+    <OutputType>Exe</OutputType>
+    <Nullable>enable</Nullable>
+
+    <ApplicationId>com.skippy.game</ApplicationId>
+    <ApplicationVersion>1</ApplicationVersion>
+    <ApplicationDisplayVersion>0.1.0</ApplicationDisplayVersion>
+
+    <!-- Keep debug builds fast; enable the linker/AOT tuning for Release yourself. -->
+    <AndroidPackageFormat>apk</AndroidPackageFormat>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.Android" />
+    <PackageReference Include="MonoGame.Content.Builder.Task" />
+  </ItemGroup>
+
+  <!-- Compile the shared game code (Skippy.Core) into this head. -->
+  <ItemGroup>
+    <Compile Include="..\Skippy.Core\**\*.cs" LinkBase="Skippy.Core" />
+  </ItemGroup>
+
+  <!-- Content is compiled to .xnb and packed as Android assets. -->
+  <ItemGroup>
+    <MonoGameContentReference Include="..\..\Content\Content.mgcb" />
+  </ItemGroup>
+
+</Project>

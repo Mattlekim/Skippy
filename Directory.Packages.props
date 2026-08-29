@@ -1,0 +1,42 @@
+<Project>
+
+  <!--
+    ============================================================================
+    Central Package Management
+    ============================================================================
+    Every NuGet version used anywhere in the solution is declared here once.
+
+    IMPORTANT: the versions below are sensible, real starting points but they
+    WILL age. Before your first build, refresh them to the latest stable with:
+
+        dotnet nuget locals all --clear          # optional, clears cache
+        dotnet list package --outdated            # after a first restore
+
+    or just edit the numbers here. Because of Central Package Management you
+    only ever change a version in this one file.
+
+    MonoGame        -> https://www.nuget.org/packages/MonoGame.Framework.DesktopGL
+    KNI (browser)   -> https://www.nuget.org/packages/nkast.Xna.Framework.Blazor
+                       (KNI is an API-compatible MonoGame fork with a real
+                        Blazor WebAssembly backend — this is what makes the
+                        browser build possible.)
+    ============================================================================
+  -->
+
+  <ItemGroup Label="MonoGame (Desktop + Android heads)">
+    <PackageVersion Include="MonoGame.Framework.DesktopGL" Version="3.8.2.1105" />
+    <PackageVersion Include="MonoGame.Framework.Android" Version="3.8.2.1105" />
+    <PackageVersion Include="MonoGame.Content.Builder.Task" Version="3.8.2.1105" />
+  </ItemGroup>
+
+  <ItemGroup Label="KNI (Web / browser head)">
+    <!-- Confirm the latest version on nuget.org — KNI ships frequently. -->
+    <PackageVersion Include="nkast.Xna.Framework.Blazor" Version="3.14.9001" />
+  </ItemGroup>
+
+  <ItemGroup Label="Blazor WebAssembly host (Web head)">
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly" Version="8.0.8" />
+    <PackageVersion Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" Version="8.0.8" />
+  </ItemGroup>
+
+</Project>

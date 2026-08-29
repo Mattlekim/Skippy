@@ -1,0 +1,36 @@
+# ---- .NET build output ----
+bin/
+obj/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+project.lock.json
+artifacts/
+
+# ---- MonoGame content pipeline intermediates ----
+Content/bin/
+Content/obj/
+*.mgcontent
+
+# ---- Blazor / WASM publish output ----
+publish/
+wwwroot/Content/
+
+# ---- Android ----
+*.keystore
+*.apk
+*.aab
+Resources/Resource.designer.cs
+
+# ---- IDE / OS ----
+.vs/
+.vscode/
+.idea/
+*.DotSettings.user
+.DS_Store
+Thumbs.db
+
+# ---- Tool restore ----
+# (keep .config/dotnet-tools.json tracked; ignore restored tool binaries)
+.dotnet/

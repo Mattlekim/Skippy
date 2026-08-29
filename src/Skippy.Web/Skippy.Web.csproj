@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+
+  <!-- ==========================================================================
+       Web head: runs the SAME MonoGame/XNA game code in the browser via KNI
+       (nkast.Xna.Framework) compiled to WebAssembly + WebGL.
+
+       Local preview:   dotnet run --project src/Skippy.Web
+                        (then open the printed http://localhost:xxxx URL —
+                         also reachable from your phone on the same network)
+       Publish static:  dotnet publish src/Skippy.Web -c Release
+                        (output in bin/Release/net8.0/publish/wwwroot — deploy
+                         that folder to any static host: GitHub Pages, Netlify…)
+       ========================================================================== -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RunAOTCompilation>false</RunAOTCompilation>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.DevServer" PrivateAssets="all" />
+    <!-- KNI: the MonoGame-compatible framework with a real browser backend. -->
+    <PackageReference Include="nkast.Xna.Framework.Blazor" />
+  </ItemGroup>
+
+  <!-- Compile the shared game code (Skippy.Core) into this head. -->
+  <ItemGroup>
+    <Compile Include="..\Skippy.Core\**\*.cs" LinkBase="Skippy.Core" />
+  </ItemGroup>
+
+  <!--
+    Content note: KNI loads the same .xnb files MonoGame produces. Build the
+    content pipeline (see Content/README.md) and copy the compiled output into
+    wwwroot/Content so it is served as static files. The starter sample uses a
+    runtime-generated texture, so the browser build runs with no content at all.
+  -->
+
+</Project>

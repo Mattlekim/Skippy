@@ -1,0 +1,20 @@
+<Project>
+
+  <!-- Settings shared by every project in the solution (heads + core). -->
+  <PropertyGroup>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+
+    <!-- Product metadata, reused across heads. -->
+    <Product>Skippy</Product>
+    <Company>Skippy</Company>
+    <Version>0.1.0</Version>
+
+    <!-- Central Package Management: all NuGet versions live in
+         Directory.Packages.props so the three heads never drift. -->
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+
+</Project>

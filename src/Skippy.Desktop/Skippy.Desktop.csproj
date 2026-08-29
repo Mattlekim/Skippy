@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- ==========================================================================
+       PC head: Windows, Linux and macOS via MonoGame DesktopGL (OpenGL).
+       Run with:   dotnet run --project src/Skippy.Desktop
+       ========================================================================== -->
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RollForward>Major</RollForward>
+    <AssemblyName>Skippy</AssemblyName>
+    <ApplicationIcon></ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="MonoGame.Framework.DesktopGL" />
+    <PackageReference Include="MonoGame.Content.Builder.Task" />
+  </ItemGroup>
+
+  <!-- Compile the shared game code (Skippy.Core) into this head. -->
+  <ItemGroup>
+    <Compile Include="..\Skippy.Core\**\*.cs" LinkBase="Skippy.Core" />
+  </ItemGroup>
+
+  <!-- Build the shared content pipeline and copy the .xnb into the output. -->
+  <ItemGroup>
+    <MonoGameContentReference Include="..\..\Content\Content.mgcb" />
+  </ItemGroup>
+
+</Project>

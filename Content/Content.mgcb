@@ -1,0 +1,25 @@
+
+#----------------------------- Global Properties ----------------------------#
+
+/outputDir:bin/$(Platform)
+/intermediateDir:obj/$(Platform)
+/platform:DesktopGL
+/config:
+/profile:Reach
+/compress:False
+
+#-------------------------------- References --------------------------------#
+
+
+#---------------------------------- Content ---------------------------------#
+
+# Add assets below with the MGCB editor (`dotnet mgcb-editor Content/Content.mgcb`)
+# or by hand, e.g.:
+#
+# #begin Sprites/Logo.png
+# /importer:TextureImporter
+# /processor:TextureProcessor
+# /build:Sprites/Logo.png
+#
+# The starter sample intentionally uses no assets so every platform runs
+# immediately after clone. Delete this comment block once you add real content.
