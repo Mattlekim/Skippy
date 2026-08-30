@@ -24,6 +24,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private readonly PerlinNoise _vegetation;
     private readonly PerlinNoise _patch;
     private readonly PerlinNoise _mountains;
+    private readonly PerlinNoise _coast;
     private readonly RiverNetwork _rivers;
     private readonly List<RiverNetwork.RiverPath> _riverScratch = new();
 
@@ -61,6 +62,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         _vegetation = new PerlinNoise(seed * 7 + 53);
         _patch = new PerlinNoise(seed * 13 + 41);
         _mountains = new PerlinNoise(seed * 101 + 5);
+        _coast = new PerlinNoise(seed * 211 + 13);
         _rivers = new RiverNetwork(seed, HeightAt);
     }
 
@@ -96,7 +98,30 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         // rock-baring faces the renderer draws as cliffs. Squared to sharpen them.
         float ridged = Ridged(wx * RidgeScale, wy * RidgeScale, octaves: 4);
         ridged *= ridged;
-        return Clamp01(h + MountainHeight * inRange * highland * ridged);
+        h = Clamp01(h + MountainHeight * inRange * highland * ridged);
+        return ErodeCoast(wx, wy, h);
+    }
+
+    // ---- coastal erosion ---------------------------------------------------
+    // A straight-run, grid-aligned coastline is the giveaway of a smooth height field
+    // meeting a flat sea. This pass carves it: near the waterline the height is nudged
+    // up or down by a fractal field, so the shore wanders into bays and headlands the
+    // way an eroded coast does. It is masked to a band around sea level, so deep water,
+    // inland ground and the mountains are left exactly as they were; and it is a pure
+    // function of position, so neighbouring chunks carve the same coast with no seam.
+    private const float CoastScale = 0.085f;  // base wavelength of the bays/headlands, in tiles
+    private const float CoastAmp = 0.34f;     // how far the waterline is pushed, in height units
+    private const float CoastBand = 0.08f;    // height band either side of sea level it acts over
+
+    private float ErodeCoast(int wx, int wy, float h)
+    {
+        float d = h - WorldConstants.SeaLevel;
+        float mask = MathF.Exp(-(d * d) / (2f * CoastBand * CoastBand));
+        if (mask < 0.01f)
+            return h; // deep water, inland or mountain — nothing to carve
+
+        float meander = _coast.Fractal01(wx * CoastScale, wy * CoastScale, octaves: 3) - 0.5f;
+        return Clamp01(h + meander * (CoastAmp * mask));
     }
 
     /// <summary>Ridged fractal noise in 0..1: sharp crests where the base noise crosses zero.</summary>
@@ -117,6 +142,34 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     /// <summary>The terrain height at a world tile — the field rivers run down.</summary>
     private float HeightAt(int wx, int wy) => TerrainHeight(wx, wy);
 
+    /// <summary>
+    /// The final coastal cleanup: after the meander has carved the shore, a lone land
+    /// tile jutting into the sea is sunk and a lone sea tile ringed by land is filled,
+    /// so the coast has no one-tile spikes or pinholes — the "no points" part of an
+    /// eroded coastline. It only looks at tiles near the waterline (elsewhere it returns
+    /// the height untouched), and reads the already-eroded field, so neighbouring chunks
+    /// resolve the same coast with no seam.
+    /// </summary>
+    private float CleanCoast(int wx, int wy)
+    {
+        float h = TerrainHeight(wx, wy);
+        if (MathF.Abs(h - WorldConstants.SeaLevel) > 2f * CoastBand)
+            return h; // well inland or well offshore — not a shore tile
+
+        int sea = 0, land = 0;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dy == 0) continue;
+                if (TerrainHeight(wx + dx, wy + dy) < WorldConstants.SeaLevel) sea++; else land++;
+            }
+
+        bool selfSea = h < WorldConstants.SeaLevel;
+        if (!selfSea && sea >= 6) return WorldConstants.SeaLevel - 0.02f; // spike → sink into the shallows
+        if (selfSea && land >= 6) return WorldConstants.SeaLevel + 0.01f; // pinhole → fill to the beach
+        return h;
+    }
+
     public void Generate(Chunk chunk)
     {
         for (int ly = 0; ly < Chunk.Size; ly++)
@@ -126,7 +179,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
                 int wx = chunk.OriginX + lx;
                 int wy = chunk.OriginY + ly;
 
-                float h = TerrainHeight(wx, wy);
+                float h = CleanCoast(wx, wy);
 
                 float baseTemp = Spread(_temperature.Fractal01(wx * TemperatureScale, wy * TemperatureScale, ClimateOctaves));
                 float moisture = Spread(_moisture.Fractal01(wx * MoistureScale, wy * MoistureScale, ClimateOctaves));
