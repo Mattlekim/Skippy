@@ -64,8 +64,33 @@ public static class Iso
     /// <summary>Height of a tile diamond. Follows the width through <see cref="TileAspect"/>.</summary>
     public static int TileHeight => (int)MathF.Round(_tileWidth * TileAspect);
 
-    /// <summary>Screen pixels one elevation level lifts a tile by.</summary>
+    /// <summary>Screen pixels one elevation level lifts a tile by, in the lowlands.</summary>
     public static float HeightStep => _tileWidth * (BaseHeightStep / BaseTileWidth);
+
+    /// <summary>
+    /// The elevation level above which extra lift is piled on. Below it — coasts,
+    /// plains, gentle hills — one level is one <see cref="HeightStep"/>, so lowland
+    /// terrain keeps its calm, readable relief.
+    /// </summary>
+    private const float HighlandStart = 4f;
+
+    /// <summary>
+    /// How much extra lift each level above <see cref="HighlandStart"/> gets, as a
+    /// multiple of <see cref="HeightStep"/>. At 2.2 a highland level rises 3.2× as far
+    /// as a lowland one, so the upper layers of a mountain pull apart from each other
+    /// and from the ground below — the peak gains height and, more to the point,
+    /// definition between its tiers instead of stacking flat, evenly-spaced shelves.
+    /// </summary>
+    private const float HighlandGain = 2.2f;
+
+    /// <summary>
+    /// Screen pixels a tile at <paramref name="level"/> is lifted up the screen. Linear
+    /// through the lowlands, then progressively steeper above <see cref="HighlandStart"/>
+    /// so high ground stands tall and its layers stay distinct. This is the single
+    /// place elevation becomes height, so terrain, culling and the camera all agree.
+    /// </summary>
+    public static float ElevationLift(float level)
+        => (level + HighlandGain * MathF.Max(0f, level - HighlandStart)) * HeightStep;
 
     /// <summary>How many times wider a tile is than <see cref="BaseTileWidth"/>.</summary>
     public static float TileScale => _tileWidth / (float)BaseTileWidth;
@@ -83,7 +108,7 @@ public static class Iso
     /// <summary>World tile (+ elevation level) → iso-space pixel (center of the diamond top).</summary>
     public static Vector2 TileToIso(float tileX, float tileY, float level) => new(
         (tileX - tileY) * (TileWidth / 2f),
-        (tileX + tileY) * (TileHeight / 2f) - level * HeightStep);
+        (tileX + tileY) * (TileHeight / 2f) - ElevationLift(level));
 
     /// <summary>Iso-space pixel → world tile, ignoring elevation (used for picking / culling).</summary>
     public static Vector2 IsoToTile(float isoX, float isoY)
