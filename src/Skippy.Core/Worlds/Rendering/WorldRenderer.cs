@@ -119,6 +119,7 @@ public sealed class WorldRenderer : IDisposable
     private const float SnowMoistFull = 0.5f;
     private const float SnowPatchSoft = 0.18f;
     private const float SnowGate = 0.37f;   // tiles warmer than this never bother computing snow
+    private const float SnowCanopy = 1.4f;  // branches catch snow a little more readily than open ground
     private static readonly Color SnowColor = new(249, 251, 255);
 
     /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
@@ -228,13 +229,17 @@ public sealed class WorldRenderer : IDisposable
         /// <summary>Seeds this plant's own RNG, so its shape and colour are its alone.</summary>
         public readonly uint Seed;
 
-        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed)
+        /// <summary>How much snow lies on this plant's crown, 0..1 — from the climate at its foot.</summary>
+        public readonly float Snow;
+
+        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed, float snow)
         {
             Pos = pos;
             Veg = veg;
             Scale = scale;
             Dead = dead;
             Seed = seed;
+            Snow = snow;
         }
     }
 
@@ -624,7 +629,7 @@ public sealed class WorldRenderer : IDisposable
                 // coastal cut has moved the visible waterline away from, so it now floats
                 // offset in the water. The smooth shore reads as wet beach without it.
                 if (world.MapView == MapView.Biome)
-                    AppendScatter(tile, a, b, c, d, tx, ty);
+                    AppendScatter(tile, a, b, c, d, tx, ty, ox, oy, lx, ly);
             }
         }
 
@@ -1440,11 +1445,13 @@ public sealed class WorldRenderer : IDisposable
     /// multiplied by the tile's area, because plants keep their own absolute size
     /// however big the tile is: a wider tile is more ground, so more of them fit.
     /// </summary>
-    private void AppendScatter(in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty)
+    private void AppendScatter(in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty,
+                               int ox, int oy, int lx, int ly)
     {
         var rng = new XorShift((uint)((tx * 73856093) ^ (ty * 19349663) ^ 0x9e37));
         float dens = tile.VegetationDensity;
         float area = Iso.TileAreaScale;
+        bool couldSnow = tile.Temperature < SnowGate;
 
         // Keep plants a little off the tile edge, but as a fixed distance rather
         // than a fixed fraction — otherwise a big tile grows a bare border and the
@@ -1478,7 +1485,15 @@ public sealed class WorldRenderer : IDisposable
                 float v = inset + span * rng.Next();
                 float s = 0.8f + 0.5f * rng.Next();
                 bool dead = rng.Next() < deadChance;
-                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits()));
+
+                // Snow lies on the plant to match the ground it stands on. Each plant also
+                // rolls its own dusting, so a stand comes out patchy — some trees laden,
+                // some bare — rather than all frosted to the same degree.
+                float snow = 0f;
+                if (couldSnow)
+                    snow = Smoothstep01(SnowCover(ox, oy, lx + u, ly + v) * (0.7f + 0.6f * rng.Next()) * SnowCanopy);
+
+                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits(), snow));
             }
         }
 
@@ -1580,18 +1595,18 @@ public sealed class WorldRenderer : IDisposable
             case Vegetation.GrassTuft: GrassTuft(at, s, ref rng); break;
 
             case Vegetation.Bush:
-                Plant(at, s, item.Dead ? _atlas.DeadBushes : _atlas.Bushes, BushHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadBushes : _atlas.Bushes, BushHeight, item.Snow, ref rng);
                 break;
 
             case Vegetation.PineTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Conifers, TreeHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Conifers, TreeHeight, item.Snow, ref rng);
                 break;
 
             // The sheets carry no palm, so jungles borrow the broadleaves rather than
             // mixing painted art with a drawn-in-code stand-in.
             case Vegetation.BroadleafTree:
             case Vegetation.PalmTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Broadleaves, TreeHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Broadleaves, TreeHeight, item.Snow, ref rng);
                 break;
 
             case Vegetation.Cactus: Cactus(at, s, ref rng); break;
@@ -1605,7 +1620,7 @@ public sealed class WorldRenderer : IDisposable
     /// it gets comes from the plant's seed, so a wood is a mix rather than one tree
     /// stamped over and over.
     /// </summary>
-    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.Region> set, float height, ref XorShift rng)
+    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.Region> set, float height, float snow, ref XorShift rng)
     {
         if (set.Count == 0)
             return;
@@ -1616,6 +1631,33 @@ public sealed class WorldRenderer : IDisposable
 
         // Only a light tint: the art already carries its own colour and variation.
         _builder.Sprite(at, size, BottomCenter, art, Vary(Color.White, ref rng, 0.07f));
+
+        if (snow > 0.02f)
+            SnowCap(at, size, snow, ref rng);
+    }
+
+    /// <summary>
+    /// Lays snow over a plant's crown as a little cluster of soft white clumps, biased to the
+    /// top of the canopy and thinning down it. Drawn as white discs (genuinely white, unlike a
+    /// tint of the green art) so laden branches read as snow. Their number and opacity scale
+    /// with <paramref name="snow"/>, and each clump jitters, so a stand looks unevenly capped.
+    /// </summary>
+    private void SnowCap(Vector2 at, Vector2 size, float snow, ref XorShift rng)
+    {
+        float w = size.X, h = size.Y;
+        int clumps = 3 + (int)(snow * 5f + rng.Next());
+        for (int i = 0; i < clumps; i++)
+        {
+            // Up the canopy (fraction of height from the foot), clustered near the crown but
+            // trailing down its sides, and narrowing towards the top so a conifer's point
+            // stays capped rather than blobbed.
+            float up = 0.5f + 0.46f * rng.Next();
+            float cx = at.X + (rng.Next() - 0.5f) * w * 0.8f * (1f - up * 0.55f);
+            float cy = at.Y - h * up;
+            float d = w * (0.12f + 0.13f * rng.Next());
+            float a = snow * (0.6f + 0.4f * rng.Next());
+            _builder.Sprite(new Vector2(cx, cy), new Vector2(d, d * 0.8f), Center, _atlas.Disc, SnowColor * a);
+        }
     }
 
     // ---- species -------------------------------------------------------------
