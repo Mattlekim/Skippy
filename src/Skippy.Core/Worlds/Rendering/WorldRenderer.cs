@@ -47,20 +47,17 @@ public sealed class WorldRenderer : IDisposable
     private readonly Vector3[] _cornerNormals = new Vector3[(Chunk.Size + 1) * (Chunk.Size + 1)];
 
     /// <summary>
-    /// How many sub-cells each land tile is split into per side. The terrain surface is
-    /// otherwise flat between one integer corner and the next, so its slope snaps at
-    /// every vertex and reads as a crease or a point. Splitting the tile and lifting
-    /// each interior sub-vertex to a smoothly interpolated height rounds those slope
-    /// changes off. 1 would be the old single quad.
+    /// How many sub-cells every land tile is split into per side. Splitting lets the
+    /// surface follow a smoothly interpolated height (no creased corners), the shore be
+    /// cut along a rounded waterline, and biome textures blend along a contour. It is one
+    /// value for ALL land tiles on purpose: if a plain tile and a border tile split their
+    /// shared edge into a different number of segments, the two approximations of the
+    /// curve don't meet and a hairline T-junction shows along the tile edge.
     /// </summary>
-    private const int Subdiv = 3;
+    private const int Subdiv = 6;
 
-    /// <summary>
-    /// A tile that meets the sea is subdivided finer than the rest and cut along the
-    /// smooth waterline, so the shore is a rounded curve through the tile rather than a
-    /// staircase along its edges. Only shore tiles pay for the extra detail.
-    /// </summary>
-    private const int CoastSubdiv = 6;
+    /// <summary>Shore tiles use the same subdivision (kept as its own name where the shore code reads clearer).</summary>
+    private const int CoastSubdiv = Subdiv;
 
     /// <summary>Height band over which the land fades out into the water — the softness of the shore edge.</summary>
     private const float CoastFeather = 0.012f;
@@ -76,7 +73,7 @@ public sealed class WorldRenderer : IDisposable
     private readonly float[] _moistField = new float[FieldStride * FieldStride];
 
     /// <summary>A boundary tile is subdivided this fine so its biome edge follows the climate contour smoothly.</summary>
-    private const int BlendSubdiv = 6;
+    private const int BlendSubdiv = Subdiv;
 
     /// <summary>How far the biome edge is warped off the (very smooth) climate contour so it wanders naturally. In tiles; kept inside the field margin.</summary>
     private const float BiomeWarpAmp = 1.4f;
