@@ -28,6 +28,7 @@ public sealed class WorldRenderer : IDisposable
     private readonly BasicEffect _effect;
     private readonly TextureAtlas _atlas;
     private readonly MeshBuilder _builder;
+    private readonly CloudLayer _clouds;
 
     private readonly Dictionary<ChunkCoord, ChunkMesh> _meshes = new();
 
@@ -41,6 +42,9 @@ public sealed class WorldRenderer : IDisposable
 
     /// <summary>Per-vertex colours for the (Chunk.Size + 1)² corner grid of the chunk being built.</summary>
     private readonly Color[] _cornerColors = new Color[(Chunk.Size + 1) * (Chunk.Size + 1)];
+
+    /// <summary>World-space surface normal at each of those corners, for the sun to light.</summary>
+    private readonly Vector3[] _cornerNormals = new Vector3[(Chunk.Size + 1) * (Chunk.Size + 1)];
 
     /// <summary>Which side of the waterline each of those corners came down on.</summary>
     private readonly bool[] _cornerWet = new bool[(Chunk.Size + 1) * (Chunk.Size + 1)];
@@ -191,11 +195,16 @@ public sealed class WorldRenderer : IDisposable
         _gd = gd;
         _atlas = new TextureAtlas(gd);
         _builder = new MeshBuilder(gd);
+        _clouds = new CloudLayer(gd);
         _effect = new BasicEffect(gd)
         {
             VertexColorEnabled = true,
             TextureEnabled = true,
             LightingEnabled = false,
+            // Per-pixel lighting interpolates the normal across each triangle instead of
+            // the lit colour, so a lone sun-facing corner reads as a smooth highlight
+            // rather than a hard star flaring out of the vertex.
+            PreferPerPixelLighting = true,
             Texture = _atlas.Texture,
             World = Matrix.Identity,
         };
@@ -264,6 +273,8 @@ public sealed class WorldRenderer : IDisposable
                      * Matrix.CreateTranslation(center.X, center.Y, 0f);
         _effect.Projection = Matrix.CreateOrthographicOffCenter(0, gd.Viewport.Width, gd.Viewport.Height, 0, 0, 1);
 
+        ApplyLighting(world);
+
         foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
         {
             pass.Apply();
@@ -275,6 +286,46 @@ public sealed class WorldRenderer : IDisposable
                 foreach (Chunk chunk in _visible)
                     _gridMeshes[chunk.Coord].Draw(gd);
         }
+
+        // Clouds and their shadows sit above the ground, so they come after it — and
+        // only in the game view, where they belong (the data views stay unclouded).
+        if (world.MapView == MapView.Biome)
+        {
+            _clouds.DrawShadows(gd, focusIso, center, zoom, world.Sky);
+            _clouds.DrawClouds(gd, focusIso, center, zoom, world.Sky);
+        }
+    }
+
+    /// <summary>
+    /// Points the built-in directional light at the sun for this frame. The geometry
+    /// on the GPU never changes as the sun moves — only these few uniforms do, so a
+    /// full day passes without a single vertex being re-uploaded.
+    ///
+    /// The data map views (height, temperature, moisture) are meant to be read as
+    /// values, so they are drawn flat with lighting off; only the biome view is lit.
+    /// </summary>
+    private void ApplyLighting(World world)
+    {
+        if (world.MapView != MapView.Biome)
+        {
+            _effect.LightingEnabled = false;
+            return;
+        }
+
+        SkyLight sky = world.Sky;
+        _effect.LightingEnabled = true;
+        _effect.DiffuseColor = Vector3.One;   // the surface albedo is the vertex colour
+        _effect.EmissiveColor = Vector3.Zero;
+        _effect.SpecularColor = Vector3.Zero;
+        _effect.AmbientLightColor = sky.Ambient;
+
+        DirectionalLight sun = _effect.DirectionalLight0;
+        sun.Enabled = true;
+        sun.Direction = sky.LightDirection;
+        sun.DiffuseColor = sky.SunColor;
+        sun.SpecularColor = Vector3.Zero;
+        _effect.DirectionalLight1.Enabled = false;
+        _effect.DirectionalLight2.Enabled = false;
     }
 
     // ---- mesh lifetime -------------------------------------------------------
@@ -374,6 +425,7 @@ public sealed class WorldRenderer : IDisposable
                 int i = vy * stride + vx;
                 _cornerWet[i] = biomeView && VertexIsWet(world, ox + vx, oy + vy);
                 _cornerColors[i] = VertexColor(world, ox + vx, oy + vy, _cornerWet[i]);
+                _cornerNormals[i] = VertexNormal(world, ox + vx, oy + vy);
             }
         }
 
@@ -404,15 +456,21 @@ public sealed class WorldRenderer : IDisposable
                 Color cC = CornerColor(world, (ly + 1) * stride + lx + 1, tx + 1, ty + 1, wet);
                 Color cD = CornerColor(world, (ly + 1) * stride + lx, tx, ty + 1, wet);
 
+                Vector3 nA = _cornerNormals[ly * stride + lx];
+                Vector3 nB = _cornerNormals[ly * stride + lx + 1];
+                Vector3 nC = _cornerNormals[(ly + 1) * stride + lx + 1];
+                Vector3 nD = _cornerNormals[(ly + 1) * stride + lx];
+
                 // Fan four triangles around a centre vertex rather than splitting on
                 // one diagonal, which would bias interpolation and show as a crease.
                 Vector2 m = (a + b + c + d) * 0.25f;
                 Color cM = Average(cA, cB, cC, cD);
+                Vector3 nM = Vector3.Normalize(nA + nB + nC + nD);
 
-                _builder.Triangle(a, cA, b, cB, m, cM, terrainUv);
-                _builder.Triangle(b, cB, c, cC, m, cM, terrainUv);
-                _builder.Triangle(c, cC, d, cD, m, cM, terrainUv);
-                _builder.Triangle(d, cD, a, cA, m, cM, terrainUv);
+                _builder.Triangle(a, cA, nA, b, cB, nB, m, cM, nM, terrainUv);
+                _builder.Triangle(b, cB, nB, c, cC, nC, m, cM, nM, terrainUv);
+                _builder.Triangle(c, cC, nC, d, cD, nD, m, cM, nM, terrainUv);
+                _builder.Triangle(d, cD, nD, a, cA, nA, m, cM, nM, terrainUv);
 
                 // The data views are about the ground itself; plants and surf would
                 // only hide it.
@@ -559,20 +617,30 @@ public sealed class WorldRenderer : IDisposable
             ground = Color.Lerp(ground, CliffRock, cliff);
         }
 
-        float elevShade = 0.82f + 0.30f * (level / (float)WorldConstants.MaxLevel);
-
-        // Slope lighting from the north-west: ground that rises toward the top of the
-        // screen catches light; a face falling away from it drops into shadow. Central
-        // differences across the neighbouring vertices. The response is turned up and
-        // its floor pulled down from the old ±0.2 so a mountain's shaded flanks read as
-        // genuinely in shadow — gentle ground barely slopes, so only steep faces feel it.
-        float slope = 0.5f * (LevelAt(world, vx - 1, vy - 1) - LevelAt(world, vx + 1, vy + 1))
-                    + 0.2f * (LevelAt(world, vx + 1, vy - 1) - LevelAt(world, vx - 1, vy + 1));
-        float slopeShade = Math.Clamp(1f + 0.07f * slope, 0.60f, 1.28f);
-
+        // Elevation and slope shading used to be baked in here on the CPU. The scene
+        // is now lit for real by the sun (see VertexNormal and the directional light
+        // in Draw), so this returns only the surface's own albedo — its biome colour,
+        // bared to rock on cliffs, with a little per-vertex jitter so a flat expanse
+        // still reads as textured ground rather than one solid fill.
         float jitter = 0.96f + 0.08f * Hash01(vx, vy);
+        return Scale(ground, jitter);
+    }
 
-        return Scale(ground, elevShade * slopeShade * jitter);
+    /// <summary>Height (in level units) fed into the normal per horizontal tile — how steep a slope reads to the light.</summary>
+    private const float NormalRelief = 0.85f;
+
+    /// <summary>
+    /// The world-space surface normal at a mesh vertex, from the slope of the level
+    /// field around it (central differences). x runs east, z south, y up; the terrain
+    /// mesh is drawn in flattened iso-space, but the light works in this upright frame,
+    /// so a hillside genuinely turns its face toward or away from the sun.
+    /// </summary>
+    private static Vector3 VertexNormal(World world, int vx, int vy)
+    {
+        float west = LevelAt(world, vx - 1, vy), east = LevelAt(world, vx + 1, vy);
+        float north = LevelAt(world, vx, vy - 1), south = LevelAt(world, vx, vy + 1);
+        var n = new Vector3((west - east) * NormalRelief, 2f, (north - south) * NormalRelief);
+        return Vector3.Normalize(n);
     }
 
     /// <summary>
@@ -983,6 +1051,7 @@ public sealed class WorldRenderer : IDisposable
         _meshes.Clear();
         foreach (ChunkMesh grid in _gridMeshes.Values) grid.Dispose();
         _gridMeshes.Clear();
+        _clouds.Dispose();
         _effect.Dispose();
         _atlas.Texture.Dispose();
     }
