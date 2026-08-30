@@ -106,6 +106,22 @@ public sealed class WorldRenderer : IDisposable
     private readonly int[] _sampleTex = new int[(MaxSub + 1) * (MaxSub + 1) * BlendSamples];
     private readonly float[] _subMem = new float[(MaxSub + 1) * (MaxSub + 1) * MaxBlendOverlays];
 
+    /// <summary>
+    /// Snow is not a biome or a texture — it falls anywhere cold and wet enough, so it is
+    /// computed from climate and dusted over the ground. <see cref="SnowTemp"/> is the
+    /// warmest it appears (climate temperature is 0 = coldest .. 1 = hottest), and it
+    /// deepens over <see cref="SnowTempRange"/> below that; it also needs moisture (nothing
+    /// falls on a cold desert). The cover breaks into drifts through a noise threshold.
+    /// </summary>
+    private const float SnowTemp = 0.34f;
+    private const float SnowTempRange = 0.22f;
+    private const float SnowMoistMin = 0.20f;
+    private const float SnowMoistFull = 0.5f;
+    private const float SnowPatchSoft = 0.18f;
+    private const float SnowGate = 0.37f;   // tiles warmer than this never bother computing snow
+    private const float SnowCanopy = 1.4f;  // branches catch snow a little more readily than open ground
+    private static readonly Color SnowColor = new(249, 251, 255);
+
     /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
     private readonly int[] _blendTex = new int[MaxBlendOverlays];
     private readonly float[] _blendW = new float[MaxBlendOverlays * 4];
@@ -213,13 +229,17 @@ public sealed class WorldRenderer : IDisposable
         /// <summary>Seeds this plant's own RNG, so its shape and colour are its alone.</summary>
         public readonly uint Seed;
 
-        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed)
+        /// <summary>How much snow lies on this plant's crown, 0..1 — from the climate at its foot.</summary>
+        public readonly float Snow;
+
+        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed, float snow)
         {
             Pos = pos;
             Veg = veg;
             Scale = scale;
             Dead = dead;
             Seed = seed;
+            Snow = snow;
         }
     }
 
@@ -563,6 +583,12 @@ public sealed class WorldRenderer : IDisposable
                             EmitLandTile(ox, oy, lx, ly, tx, ty, baseTex, flipU, flipV, coastal);
                         else
                             EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
+
+                        // Snow is dusted over any biome that is cold and wet enough. Both land
+                        // paths leave their sub-grid in place, so it just reuses that. Skipped
+                        // outright anywhere it is too warm.
+                        if (tile.Temperature < SnowGate)
+                            EmitSnow(ox, oy, lx, ly, Subdiv, Subdiv + 1);
                     }
                     else
                     {
@@ -603,7 +629,7 @@ public sealed class WorldRenderer : IDisposable
                 // coastal cut has moved the visible waterline away from, so it now floats
                 // offset in the water. The smooth shore reads as wet beach without it.
                 if (world.MapView == MapView.Biome)
-                    AppendScatter(tile, a, b, c, d, tx, ty);
+                    AppendScatter(tile, a, b, c, d, tx, ty, ox, oy, lx, ly);
             }
         }
 
@@ -656,6 +682,7 @@ public sealed class WorldRenderer : IDisposable
                 _subUv[k] = TileUv(tex, u, v, flipU, flipV);
                 _subNrm[k] = SmoothNormal(fx, fy);
                 _subCol[k] = overlay ? BlendColor(wTL, wTR, wBR, wBL, u, v, tx, ty) : TerrainWhite;
+                _subA[k] = 1f; // full ground (no shore cut), so snow drawn after reads the right alpha
             }
         }
 
@@ -871,8 +898,8 @@ public sealed class WorldRenderer : IDisposable
         4,  // Desert → sand
         0,  // TemperateForest → grass
         1,  // Taiga → dirt
-        5,  // Tundra → frost-dirt
-        2,  // Snow
+        1,  // Tundra → dirt (the frost is drawn by the procedural snow, not a texture)
+        1,  // Snow → dirt (a frozen-ground base; the white is the procedural snow, which lies thick here)
         11, // Jungle → flower meadow (lush)
         10, // Swamp
         6,  // Rock
@@ -1055,6 +1082,86 @@ public sealed class WorldRenderer : IDisposable
                                   _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
                                   _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
             }
+    }
+
+    /// <summary>
+    /// Dusts snow over a land tile that has just been drawn, reusing its sub-grid. Snow
+    /// coverage is climate-driven (see <see cref="SnowCover"/>) and drifted by noise, drawn
+    /// as a lit white layer over whatever biome is underneath, scaled by the shore alpha so
+    /// it never settles on the water. Skips the draw entirely when nothing is cold enough.
+    /// </summary>
+    private void EmitSnow(int ox, int oy, int lx, int ly, int n, int span)
+    {
+        Vector2 uv = _atlas.White.CenterUv;
+        bool any = false;
+        for (int i = 0; i <= n; i++)
+            for (int j = 0; j <= n; j++)
+            {
+                int k = i * span + j;
+                float flx = lx + j / (float)n, fly = ly + i / (float)n;
+                float s = SnowCover(ox, oy, flx, fly) * _subA[k];
+                _subUv[k] = uv;
+                if (s <= 0.004f) { _subCol[k] = Color.Transparent; continue; }
+                any = true;
+
+                // Break the flat white with a fine brightness grain (wind-packed drifts,
+                // little shadows) so a snowfield reads as snow and not as fog.
+                float grain = 0.80f + 0.20f * ValueNoise((ox + flx) * 0.9f, (oy + fly) * 0.9f);
+                float a = s * 255f;
+                _subCol[k] = new Color((byte)(SnowColor.R * grain * s),
+                                       (byte)(SnowColor.G * grain * s),
+                                       (byte)(SnowColor.B * grain * s),
+                                       (byte)a);
+            }
+        if (!any) return;
+
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+            {
+                int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p01], _subCol[p01], _subNrm[p01], _subUv[p01],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11]);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
+                                  _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
+            }
+    }
+
+    /// <summary>
+    /// How thickly snow lies at a world point: none until it is cold enough and there is
+    /// moisture to fall, then more the colder it gets, broken into drifts by a fractal
+    /// threshold so it is patchy at the edge of its range and solid deep in the cold.
+    /// </summary>
+    private float SnowCover(int ox, int oy, float flx, float fly)
+    {
+        float cold = Math.Clamp((SnowTemp - SampleField(_tempField, flx, fly)) / SnowTempRange, 0f, 1f);
+        if (cold <= 0f) return 0f;
+        float wet = Smoothstep01((SampleField(_moistField, flx, fly) - SnowMoistMin) / (SnowMoistFull - SnowMoistMin));
+        float amount = cold * wet;
+        if (amount <= 0f) return 0f;
+
+        // A drift forms only where the fractal threshold dips below how much snow the climate
+        // wants here, so cover grows from scattered patches (marginal cold) to near-solid
+        // (deep cold) with bare ground always breaking up anything but the coldest places.
+        float nz = SnowNoise(ox + flx, oy + fly);
+        return 0.92f * Smoothstep01((amount - nz) / SnowPatchSoft);
+    }
+
+    /// <summary>Fractal value noise for the snow drifts (a few tiles across), in 0..1.</summary>
+    private static float SnowNoise(float x, float y)
+    {
+        float sum = 0f, amp = 0.5f, freq = 0.22f, norm = 0f;
+        for (int o = 0; o < 3; o++)
+        {
+            sum += amp * ValueNoise(x * freq, y * freq);
+            norm += amp;
+            amp *= 0.5f;
+            freq *= 2.3f;
+        }
+        // A little contrast pushes the field toward its extremes, so drifts have decisive
+        // edges and clear bare ground between them rather than a foggy wash.
+        return Smoothstep01((sum / norm - 0.5f) * 1.5f + 0.5f);
     }
 
     /// <summary>Catmull-Rom spline through <paramref name="p1"/>..<paramref name="p2"/>; passes through the control points.</summary>
@@ -1338,11 +1445,13 @@ public sealed class WorldRenderer : IDisposable
     /// multiplied by the tile's area, because plants keep their own absolute size
     /// however big the tile is: a wider tile is more ground, so more of them fit.
     /// </summary>
-    private void AppendScatter(in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty)
+    private void AppendScatter(in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty,
+                               int ox, int oy, int lx, int ly)
     {
         var rng = new XorShift((uint)((tx * 73856093) ^ (ty * 19349663) ^ 0x9e37));
         float dens = tile.VegetationDensity;
         float area = Iso.TileAreaScale;
+        bool couldSnow = tile.Temperature < SnowGate;
 
         // Keep plants a little off the tile edge, but as a fixed distance rather
         // than a fixed fraction — otherwise a big tile grows a bare border and the
@@ -1376,7 +1485,15 @@ public sealed class WorldRenderer : IDisposable
                 float v = inset + span * rng.Next();
                 float s = 0.8f + 0.5f * rng.Next();
                 bool dead = rng.Next() < deadChance;
-                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits()));
+
+                // Snow lies on the plant to match the ground it stands on. Each plant also
+                // rolls its own dusting, so a stand comes out patchy — some trees laden,
+                // some bare — rather than all frosted to the same degree.
+                float snow = 0f;
+                if (couldSnow)
+                    snow = Smoothstep01(SnowCover(ox, oy, lx + u, ly + v) * (0.7f + 0.6f * rng.Next()) * SnowCanopy);
+
+                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits(), snow));
             }
         }
 
@@ -1478,18 +1595,18 @@ public sealed class WorldRenderer : IDisposable
             case Vegetation.GrassTuft: GrassTuft(at, s, ref rng); break;
 
             case Vegetation.Bush:
-                Plant(at, s, item.Dead ? _atlas.DeadBushes : _atlas.Bushes, BushHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadBushes : _atlas.Bushes, BushHeight, item.Snow, ref rng);
                 break;
 
             case Vegetation.PineTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Conifers, TreeHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Conifers, TreeHeight, item.Snow, ref rng);
                 break;
 
             // The sheets carry no palm, so jungles borrow the broadleaves rather than
             // mixing painted art with a drawn-in-code stand-in.
             case Vegetation.BroadleafTree:
             case Vegetation.PalmTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Broadleaves, TreeHeight, ref rng);
+                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Broadleaves, TreeHeight, item.Snow, ref rng);
                 break;
 
             case Vegetation.Cactus: Cactus(at, s, ref rng); break;
@@ -1503,7 +1620,7 @@ public sealed class WorldRenderer : IDisposable
     /// it gets comes from the plant's seed, so a wood is a mix rather than one tree
     /// stamped over and over.
     /// </summary>
-    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.Region> set, float height, ref XorShift rng)
+    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.Region> set, float height, float snow, ref XorShift rng)
     {
         if (set.Count == 0)
             return;
@@ -1514,6 +1631,33 @@ public sealed class WorldRenderer : IDisposable
 
         // Only a light tint: the art already carries its own colour and variation.
         _builder.Sprite(at, size, BottomCenter, art, Vary(Color.White, ref rng, 0.07f));
+
+        if (snow > 0.02f)
+            SnowCap(at, size, snow, ref rng);
+    }
+
+    /// <summary>
+    /// Lays snow over a plant's crown as a little cluster of soft white clumps, biased to the
+    /// top of the canopy and thinning down it. Drawn as white discs (genuinely white, unlike a
+    /// tint of the green art) so laden branches read as snow. Their number and opacity scale
+    /// with <paramref name="snow"/>, and each clump jitters, so a stand looks unevenly capped.
+    /// </summary>
+    private void SnowCap(Vector2 at, Vector2 size, float snow, ref XorShift rng)
+    {
+        float w = size.X, h = size.Y;
+        int clumps = 3 + (int)(snow * 5f + rng.Next());
+        for (int i = 0; i < clumps; i++)
+        {
+            // Up the canopy (fraction of height from the foot), clustered near the crown but
+            // trailing down its sides, and narrowing towards the top so a conifer's point
+            // stays capped rather than blobbed.
+            float up = 0.5f + 0.46f * rng.Next();
+            float cx = at.X + (rng.Next() - 0.5f) * w * 0.8f * (1f - up * 0.55f);
+            float cy = at.Y - h * up;
+            float d = w * (0.12f + 0.13f * rng.Next());
+            float a = snow * (0.6f + 0.4f * rng.Next());
+            _builder.Sprite(new Vector2(cx, cy), new Vector2(d, d * 0.8f), Center, _atlas.Disc, SnowColor * a);
+        }
     }
 
     // ---- species -------------------------------------------------------------
