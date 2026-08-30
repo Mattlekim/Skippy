@@ -202,10 +202,11 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
                         // to sea level. Cutting the bed to level 0 put a channel
                         // hundreds of pixels below its own banks, and the shared
                         // corner vertices stretched the quads into spikes.
-                        // One elevation step down is a riverbed; the rest of the
-                        // terrain keeps its shape and the water descends with it.
-                        if (t.Level > 0)
-                            t.Level--;
+                        // The bed sits a riverbed's depth below the banks; the rest of
+                        // the terrain keeps its shape and the water descends with it.
+                        // In the now four-times-finer levels that depth is a few steps,
+                        // not one, so the channel stays as deep as it always was.
+                        t.Level -= (byte)Math.Min(t.Level, RiverbedDepth);
 
                         t.Height = MathF.Max(WorldConstants.SeaLevel, t.Height - 0.01f);
                         t.Moisture = Clamp01(t.Moisture + 0.25f);
@@ -238,6 +239,9 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     /// <summary>How much damper ground at the water table is, and the height band it fades over.</summary>
     private const float CoastalDamp = 0.30f;
     private const float DampBand = 0.07f;
+
+    /// <summary>Elevation steps a river cuts below its banks (scaled with the level count).</summary>
+    private const byte RiverbedDepth = 4;
 
     /// <summary>Clamped smoothstep, so a blend has no hard edge where it begins or ends.</summary>
     private static float Smooth01(float t)

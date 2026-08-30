@@ -27,10 +27,12 @@ public static class Iso
     /// This and <see cref="TileAspect"/> together set the camera's apparent pitch: a
     /// tall step over a foreshortened ground plane is a low, tilted-back view in which
     /// hills and mountains stand up off the map, rather than a near-top-down one that
-    /// flattens them. High enough that a mountain reads as a mountain, but no higher —
-    /// past this the jump from one level to the next starts to read as a wall.
+    /// flattens them. A quarter of what it was, to match the four-fold finer
+    /// elevation steps (<see cref="WorldConstants.MaxLevel"/>): each level lifts a
+    /// little, but there are four times as many, so the tallest peak still reaches
+    /// the same height while the slope up to it reads as smooth rather than stepped.
     /// </summary>
-    private const float BaseHeightStep = 21f;
+    private const float BaseHeightStep = 5.25f;
 
     /// <summary>
     /// The ground diamond's height as a fraction of its width. 0.5 is a textbook 2:1
@@ -71,9 +73,10 @@ public static class Iso
     /// <summary>
     /// The elevation level above which extra lift is piled on. Below it — coasts,
     /// plains, gentle hills — one level is one <see cref="HeightStep"/>, so lowland
-    /// terrain keeps its calm, readable relief.
+    /// terrain keeps its calm, readable relief. Scaled up with
+    /// <see cref="WorldConstants.MaxLevel"/> so it still sits at the same real height.
     /// </summary>
-    private const float HighlandStart = 4f;
+    private const float HighlandStart = 16f;
 
     /// <summary>
     /// How much extra lift each level above <see cref="HighlandStart"/> gets, as a
