@@ -695,16 +695,13 @@ public sealed class WorldRenderer : IDisposable
     }
 
     private static bool IsWaterTex(int tex) => tex == 8 || tex == 9;
-    private static bool IsLandTex(int tex) => tex >= 0 && tex != 8 && tex != 9;
 
     /// <summary>
-    /// Whether two ground textures may blend into one another. Everything blends except
-    /// deep water against land: that meeting is a true shore, kept as a crisp waterline
-    /// with surf. Shallow water still blends both ways, so a beach fades into the shallows
-    /// instead of ending on a hard line.
+    /// Whether two ground textures may blend into one another. Water and land never do:
+    /// that meeting is the shore, a real waterline kept crisp (and carved by the coastal
+    /// erosion pass, not faded). Land blends with land, and deep water with shallow.
     /// </summary>
-    private static bool CanBlend(int a, int b)
-        => !((a == 8 && IsLandTex(b)) || (b == 8 && IsLandTex(a)));
+    private static bool CanBlend(int a, int b) => IsWaterTex(a) == IsWaterTex(b);
 
     /// <summary>Smooth value noise in 0..1 from the integer hash, for roughening the blend edge.</summary>
     private static float ValueNoise(float x, float y)
