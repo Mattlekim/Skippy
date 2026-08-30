@@ -50,19 +50,16 @@ jobs:
         # opt out of both the EOL-workload and EOL-framework checks.
         run: dotnet build src/Skippy.Android -c Release -f net8.0-android -p:CheckEolWorkloads=false -p:CheckEolTargetFramework=false
 
-  # Optional: publish the browser preview to GitHub Pages on pushes to main.
-  # Enable Pages in the repo settings (Source: GitHub Actions) to use this.
+  # Publish the browser build to the gh-pages branch on pushes to main.
+  # This deploys by pushing a branch (not an Actions artifact), so it uses no
+  # Actions storage. In the repo: Settings → Pages → Source: "Deploy from a
+  # branch" → gh-pages / (root). Site: https://<owner>.github.io/<repo>/
   deploy-web-preview:
     if: github.ref == 'refs/heads/main'
     needs: desktop-and-web
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -76,15 +73,19 @@ jobs:
       - name: Publish Web
         run: dotnet publish src/Skippy.Web -c Release -o web-dist
 
-      # Blazor on a project Pages site lives under /<repo>/, so rewrite <base>.
-      - name: Fix base href for GitHub Pages
+      # Blazor on a project Pages site lives under /<repo>/, so rewrite <base>;
+      # .nojekyll keeps GitHub Pages from hiding the _framework folder.
+      - name: Prepare site
         run: |
           sed -i 's|<base href="/" />|<base href="/${{ github.event.repository.name }}/" />|' web-dist/wwwroot/index.html
           touch web-dist/wwwroot/.nojekyll
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: web-dist/wwwroot
-
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Deploy to gh-pages
+        run: |
+          cd web-dist/wwwroot
+          git init -q -b gh-pages
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Deploy ${{ github.sha }}"
+          git push -f "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" gh-pages
