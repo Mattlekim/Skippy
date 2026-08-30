@@ -55,15 +55,28 @@ public sealed class WorldRenderer : IDisposable
     /// </summary>
     private const int Subdiv = 3;
 
+    /// <summary>
+    /// A tile that meets the sea is subdivided finer than the rest and cut along the
+    /// smooth waterline, so the shore is a rounded curve through the tile rather than a
+    /// staircase along its edges. Only shore tiles pay for the extra detail.
+    /// </summary>
+    private const int CoastSubdiv = 6;
+
+    /// <summary>Height band over which the land fades out into the water — the softness of the shore edge.</summary>
+    private const float CoastFeather = 0.012f;
+
     /// <summary>The chunk's level field plus a two-tile margin, so the smooth interpolation's 4×4 stencil never leaves it.</summary>
     private const int FieldStride = Chunk.Size + 4;
     private readonly float[] _levelField = new float[FieldStride * FieldStride];
 
-    /// <summary>Scratch for one land tile's (Subdiv+1)² sub-vertices while it is being emitted.</summary>
-    private readonly Vector2[] _subPos = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
-    private readonly Vector2[] _subUv = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
-    private readonly Vector3[] _subNrm = new Vector3[(Subdiv + 1) * (Subdiv + 1)];
-    private readonly Color[] _subCol = new Color[(Subdiv + 1) * (Subdiv + 1)];
+    /// <summary>The chunk's continuous height field (same margin), for finding the true waterline within a shore tile.</summary>
+    private readonly float[] _heightField = new float[FieldStride * FieldStride];
+
+    /// <summary>Scratch for one tile's sub-vertices while it is being emitted (sized for the finer shore grid).</summary>
+    private readonly Vector2[] _subPos = new Vector2[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
+    private readonly Vector2[] _subUv = new Vector2[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
+    private readonly Vector3[] _subNrm = new Vector3[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
+    private readonly Color[] _subCol = new Color[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
 
     /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
     private readonly int[] _blendTex = new int[MaxBlendOverlays];
@@ -445,7 +458,12 @@ public sealed class WorldRenderer : IDisposable
         // lookup for every one of its samples.
         for (int fy = 0; fy < FieldStride; fy++)
             for (int fx = 0; fx < FieldStride; fx++)
-                _levelField[fy * FieldStride + fx] = LevelAt(world, ox + fx - 2, oy + fy - 2);
+            {
+                int i = fy * FieldStride + fx;
+                _levelField[i] = LevelAt(world, ox + fx - 2, oy + fy - 2);
+                _heightField[i] = world.TryGetTile(ox + fx - 2, oy + fy - 2, out Tile ht)
+                    ? ht.Height : WorldConstants.SeaLevel + 0.1f;
+            }
 
         // Every vertex of the chunk gets ONE colour, computed from data that belongs
         // to the vertex itself (its own elevation, the slope around it, the biomes
@@ -497,7 +515,13 @@ public sealed class WorldRenderer : IDisposable
                     int baseTex = TerrainTextureIndex(tile.Biome, tx, ty);
                     int overlays = GatherBlend(world, tx, ty, baseTex);
 
-                    if (!tile.IsWater)
+                    if (!tile.IsWater && IsCoastalLand(lx, ly))
+                    {
+                        // A land tile that touches the sea: cut it along the real waterline
+                        // so the shore rounds through the tile instead of stepping round it.
+                        EmitCoastalTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV);
+                    }
+                    else if (!tile.IsWater)
                     {
                         EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
                         for (int o = 0; o < overlays; o++)
@@ -536,13 +560,12 @@ public sealed class WorldRenderer : IDisposable
                     _builder.Triangle(d, cD, nD, a, cA, nA, m, cM, nM, terrainUv);
                 }
 
-                // The data views are about the ground itself; plants and surf would
-                // only hide it.
+                // The data views are about the ground itself; plants would only hide it.
+                // Surf is no longer collected here: it traced tile edges, which the
+                // coastal cut has moved the visible waterline away from, so it now floats
+                // offset in the water. The smooth shore reads as wet beach without it.
                 if (world.MapView == MapView.Biome)
-                {
                     AppendScatter(tile, a, b, c, d, tx, ty);
-                    CollectShore(world, tile, a, b, c, d, tx, ty);
-                }
             }
         }
 
@@ -627,6 +650,83 @@ public sealed class WorldRenderer : IDisposable
         Vector2 uvD = TileUv(tex, 0f, 1f, flipU, flipV);
         _builder.Triangle(a, cA, up, uvA, b, cB, up, uvB, c, cC, up, uvC);
         _builder.Triangle(a, cA, up, uvA, c, cC, up, uvC, d, cD, up, uvD);
+    }
+
+    /// <summary>A land tile is coastal if it is above the sea but at least one of its eight neighbours is under it.</summary>
+    private bool IsCoastalLand(int lx, int ly)
+    {
+        int c = (ly + 2) * FieldStride + (lx + 2);
+        if (_heightField[c] < WorldConstants.SeaLevel)
+            return false;
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+                if (_heightField[(ly + 2 + dy) * FieldStride + (lx + 2 + dx)] < WorldConstants.SeaLevel)
+                    return true;
+        return false;
+    }
+
+    /// <summary>
+    /// A shore tile: a flat sheet of shallow water across the tile, then the land laid on
+    /// top and faded out (per sub-vertex) exactly where the smoothly-interpolated height
+    /// drops below sea level. The land's own edge is therefore the real waterline — a
+    /// rounded curve through the tile — and the water shows through beyond it. Subdivided
+    /// fine so that curve is smooth, and lit and textured like any other ground.
+    /// </summary>
+    private void EmitCoastalTile(int lx, int ly, int tx, int ty, TextureAtlas.Region land, bool flipU, bool flipV)
+    {
+        // Shallow water, flat at sea level, filling the whole tile behind the land.
+        Vector2 a0 = Iso.TileToIso(tx, ty, 0f), b0 = Iso.TileToIso(tx + 1, ty, 0f);
+        Vector2 c0 = Iso.TileToIso(tx + 1, ty + 1, 0f), d0 = Iso.TileToIso(tx, ty + 1, 0f);
+        EmitFlatTile(a0, b0, c0, d0, tx, ty, _atlas.Terrain[9], flipU, flipV, 1f, 1f, 1f, 1f, false);
+
+        const int n = CoastSubdiv, span = CoastSubdiv + 1;
+        for (int i = 0; i <= n; i++)
+        {
+            float v = i / (float)n;
+            for (int j = 0; j <= n; j++)
+            {
+                float u = j / (float)n;
+                float fx = lx + u, fy = ly + v;
+                int k = i * span + j;
+                _subPos[k] = Iso.TileToIso(tx + u, ty + v, SmoothLevel(fx, fy));
+                _subUv[k] = TileUv(land, u, v, flipU, flipV);
+                _subNrm[k] = SmoothNormal(fx, fy);
+                float above = (SmoothHeight(fx, fy) - WorldConstants.SeaLevel) / CoastFeather;
+                _subCol[k] = TerrainWhite * Smoothstep01(above);
+            }
+        }
+
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+            {
+                int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p01], _subCol[p01], _subNrm[p01], _subUv[p01],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11]);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
+                                  _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
+            }
+    }
+
+    /// <summary>A smoothly interpolated continuous height at a chunk-local fractional position (bicubic Catmull-Rom).</summary>
+    private float SmoothHeight(float fx, float fy)
+    {
+        int ix = (int)MathF.Floor(fx), iy = (int)MathF.Floor(fy);
+        float u = fx - ix, v = fy - iy;
+        float r0 = CatmullRom(Hf(ix - 1, iy - 1), Hf(ix, iy - 1), Hf(ix + 1, iy - 1), Hf(ix + 2, iy - 1), u);
+        float r1 = CatmullRom(Hf(ix - 1, iy), Hf(ix, iy), Hf(ix + 1, iy), Hf(ix + 2, iy), u);
+        float r2 = CatmullRom(Hf(ix - 1, iy + 1), Hf(ix, iy + 1), Hf(ix + 1, iy + 1), Hf(ix + 2, iy + 1), u);
+        float r3 = CatmullRom(Hf(ix - 1, iy + 2), Hf(ix, iy + 2), Hf(ix + 1, iy + 2), Hf(ix + 2, iy + 2), u);
+        return CatmullRom(r0, r1, r2, r3, v);
+    }
+
+    /// <summary>Reads the cached height field by chunk-local tile coordinate, clamped to the margin.</summary>
+    private float Hf(int localX, int localY)
+    {
+        int fx = Math.Clamp(localX + 2, 0, FieldStride - 1);
+        int fy = Math.Clamp(localY + 2, 0, FieldStride - 1);
+        return _heightField[fy * FieldStride + fx];
     }
 
     /// <summary>
