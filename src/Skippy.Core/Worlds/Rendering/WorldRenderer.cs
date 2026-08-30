@@ -63,6 +63,18 @@ public sealed class WorldRenderer : IDisposable
     private readonly Vector2[] _subPos = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
     private readonly Vector2[] _subUv = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
     private readonly Vector3[] _subNrm = new Vector3[(Subdiv + 1) * (Subdiv + 1)];
+    private readonly Color[] _subCol = new Color[(Subdiv + 1) * (Subdiv + 1)];
+
+    /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
+    private readonly int[] _blendTex = new int[MaxBlendOverlays];
+    private readonly float[] _blendW = new float[MaxBlendOverlays * 4];
+
+    /// <summary>Most neighbouring textures blended into one tile (a rare 4-way corner is capped here).</summary>
+    private const int MaxBlendOverlays = 4;
+
+    /// <summary>How the blend edge is roughened so a biome border wanders instead of running straight.</summary>
+    private const float BlendNoiseFreq = 0.9f;
+    private const float BlendNoiseAmp = 0.5f;
 
     /// <summary>Which side of the waterline each of those corners came down on.</summary>
     private readonly bool[] _cornerWet = new bool[(Chunk.Size + 1) * (Chunk.Size + 1)];
@@ -475,16 +487,30 @@ public sealed class WorldRenderer : IDisposable
                 {
                     // The ground wears its biome's painted texture, tiled one repeat per
                     // world tile and randomly flipped so the grid does not read as a
-                    // stamp. Colour is left white — the texture carries the colour, the
-                    // sun the shade. Land is subdivided and smoothed so its slopes flow
-                    // between corners; flat water keeps a single quad.
-                    TextureAtlas.Region tex = _atlas.Terrain[TerrainTextureIndex(tile.Biome, tx, ty)];
+                    // stamp. Where a neighbouring tile wears a different texture it is
+                    // blended back in over this one, fading from the shared edge, so the
+                    // border is a soft (and, with the noise, wandering) gradient rather
+                    // than a hard tile edge. Colour is left white — the texture carries
+                    // the colour, the sun the shade. Land is subdivided and smoothed;
+                    // flat water keeps a single quad.
                     TileFlip(tx, ty, out bool flipU, out bool flipV);
+                    int baseTex = TerrainTextureIndex(tile.Biome, tx, ty);
+                    int overlays = GatherBlend(world, tx, ty, baseTex);
 
                     if (!tile.IsWater)
-                        EmitSmoothTile(lx, ly, tx, ty, tex, flipU, flipV);
+                    {
+                        EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
+                        for (int o = 0; o < overlays; o++)
+                            EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[_blendTex[o]], flipU, flipV,
+                                           _blendW[o * 4], _blendW[o * 4 + 1], _blendW[o * 4 + 2], _blendW[o * 4 + 3], true);
+                    }
                     else
-                        EmitFlatTile(a, b, c, d, tex, flipU, flipV);
+                    {
+                        EmitFlatTile(a, b, c, d, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
+                        for (int o = 0; o < overlays; o++)
+                            EmitFlatTile(a, b, c, d, tx, ty, _atlas.Terrain[_blendTex[o]], flipU, flipV,
+                                         _blendW[o * 4], _blendW[o * 4 + 1], _blendW[o * 4 + 2], _blendW[o * 4 + 3], true);
+                    }
                 }
                 else
                 {
@@ -552,7 +578,8 @@ public sealed class WorldRenderer : IDisposable
     /// tile's ground texture <paramref name="tex"/> once across the whole tile, flipped
     /// per <paramref name="flipU"/>/<paramref name="flipV"/>.
     /// </summary>
-    private void EmitSmoothTile(int lx, int ly, int tx, int ty, TextureAtlas.Region tex, bool flipU, bool flipV)
+    private void EmitSmoothTile(int lx, int ly, int tx, int ty, TextureAtlas.Region tex, bool flipU, bool flipV,
+                                float wTL, float wTR, float wBR, float wBL, bool overlay)
     {
         const int n = Subdiv, span = Subdiv + 1;
         for (int i = 0; i <= n; i++)
@@ -567,6 +594,7 @@ public sealed class WorldRenderer : IDisposable
                 _subPos[k] = Iso.TileToIso(tx + u, ty + v, level);
                 _subUv[k] = TileUv(tex, u, v, flipU, flipV);
                 _subNrm[k] = SmoothNormal(fx, fy);
+                _subCol[k] = overlay ? BlendColor(wTL, wTR, wBR, wBL, u, v, tx, ty) : TerrainWhite;
             }
         }
 
@@ -574,25 +602,120 @@ public sealed class WorldRenderer : IDisposable
             for (int j = 0; j < n; j++)
             {
                 int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
-                _builder.Triangle(_subPos[p00], TerrainWhite, _subNrm[p00], _subUv[p00],
-                                  _subPos[p01], TerrainWhite, _subNrm[p01], _subUv[p01],
-                                  _subPos[p11], TerrainWhite, _subNrm[p11], _subUv[p11]);
-                _builder.Triangle(_subPos[p00], TerrainWhite, _subNrm[p00], _subUv[p00],
-                                  _subPos[p11], TerrainWhite, _subNrm[p11], _subUv[p11],
-                                  _subPos[p10], TerrainWhite, _subNrm[p10], _subUv[p10]);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p01], _subCol[p01], _subNrm[p01], _subUv[p01],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11]);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
+                                  _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
             }
     }
 
     /// <summary>A flat (water) tile as two textured triangles, the ground texture stretched once across it.</summary>
-    private void EmitFlatTile(Vector2 a, Vector2 b, Vector2 c, Vector2 d, TextureAtlas.Region tex, bool flipU, bool flipV)
+    private void EmitFlatTile(Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty,
+                              TextureAtlas.Region tex, bool flipU, bool flipV,
+                              float wTL, float wTR, float wBR, float wBL, bool overlay)
     {
         Vector3 up = Vector3.Up;
+        Color cA = overlay ? BlendColor(wTL, wTR, wBR, wBL, 0f, 0f, tx, ty) : TerrainWhite;
+        Color cB = overlay ? BlendColor(wTL, wTR, wBR, wBL, 1f, 0f, tx, ty) : TerrainWhite;
+        Color cC = overlay ? BlendColor(wTL, wTR, wBR, wBL, 1f, 1f, tx, ty) : TerrainWhite;
+        Color cD = overlay ? BlendColor(wTL, wTR, wBR, wBL, 0f, 1f, tx, ty) : TerrainWhite;
         Vector2 uvA = TileUv(tex, 0f, 0f, flipU, flipV);
         Vector2 uvB = TileUv(tex, 1f, 0f, flipU, flipV);
         Vector2 uvC = TileUv(tex, 1f, 1f, flipU, flipV);
         Vector2 uvD = TileUv(tex, 0f, 1f, flipU, flipV);
-        _builder.Triangle(a, TerrainWhite, up, uvA, b, TerrainWhite, up, uvB, c, TerrainWhite, up, uvC);
-        _builder.Triangle(a, TerrainWhite, up, uvA, c, TerrainWhite, up, uvC, d, TerrainWhite, up, uvD);
+        _builder.Triangle(a, cA, up, uvA, b, cB, up, uvB, c, cC, up, uvC);
+        _builder.Triangle(a, cA, up, uvA, c, cC, up, uvC, d, cD, up, uvD);
+    }
+
+    /// <summary>
+    /// The premultiplied white an overlay vertex draws at: its blend weight (bilinear
+    /// across the tile's four corner weights) roughened by position noise so the edge of
+    /// the blend wanders. rgb = a = weight, so the layer composites as weight·texture over
+    /// what is already there.
+    /// </summary>
+    private static Color BlendColor(float wTL, float wTR, float wBR, float wBL, float u, float v, int tx, int ty)
+    {
+        float top = MathHelper.Lerp(wTL, wTR, u);
+        float bottom = MathHelper.Lerp(wBL, wBR, u);
+        float w = MathHelper.Lerp(top, bottom, v);
+        w += (ValueNoise((tx + u) * BlendNoiseFreq, (ty + v) * BlendNoiseFreq) - 0.5f) * BlendNoiseAmp;
+        return TerrainWhite * Math.Clamp(w, 0f, 1f);
+    }
+
+    /// <summary>
+    /// Finds the textures worn by tiles around this one that differ from its own, and how
+    /// strongly each shows at the tile's four corners (the share of the corner's four
+    /// tiles wearing it). Land and water never bleed into one another — that join is the
+    /// shore, drawn with surf — so only same-element textures are gathered. Returns the
+    /// overlay count, filling <see cref="_blendTex"/> and <see cref="_blendW"/>.
+    /// </summary>
+    private int GatherBlend(World world, int tx, int ty, int baseTex)
+    {
+        // The 3×3 block of texture indices around the tile (-1 where nothing is loaded).
+        Span<int> t = stackalloc int[9];
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                int wx = tx + dx, wy = ty + dy;
+                t[(dy + 1) * 3 + (dx + 1)] =
+                    world.TryGetTile(wx, wy, out Tile n) ? TerrainTextureIndex(n.Biome, wx, wy) : -1;
+            }
+
+        // The four tiles meeting at each of the tile's corners, as indices into the block.
+        ReadOnlySpan<int> corners = stackalloc int[] { 0, 1, 3, 4, /*TL*/ 1, 2, 4, 5, /*TR*/ 4, 5, 7, 8, /*BR*/ 3, 4, 6, 7 /*BL*/ };
+
+        int count = 0;
+        for (int c = 0; c < 9 && count < MaxBlendOverlays; c++)
+        {
+            int cand = t[c];
+            if (cand < 0 || cand == baseTex || !CanBlend(baseTex, cand))
+                continue;
+            bool seen = false;
+            for (int k = 0; k < count; k++) if (_blendTex[k] == cand) { seen = true; break; }
+            if (seen) continue;
+
+            _blendTex[count] = cand;
+            for (int q = 0; q < 4; q++)
+            {
+                int hit = 0, valid = 0;
+                for (int m = 0; m < 4; m++)
+                {
+                    int v = t[corners[q * 4 + m]];
+                    if (v < 0) continue;
+                    valid++;
+                    if (v == cand) hit++;
+                }
+                _blendW[count * 4 + q] = valid > 0 ? hit / (float)valid : 0f;
+            }
+            count++;
+        }
+        return count;
+    }
+
+    private static bool IsWaterTex(int tex) => tex == 8 || tex == 9;
+    private static bool IsLandTex(int tex) => tex >= 0 && tex != 8 && tex != 9;
+
+    /// <summary>
+    /// Whether two ground textures may blend into one another. Everything blends except
+    /// deep water against land: that meeting is a true shore, kept as a crisp waterline
+    /// with surf. Shallow water still blends both ways, so a beach fades into the shallows
+    /// instead of ending on a hard line.
+    /// </summary>
+    private static bool CanBlend(int a, int b)
+        => !((a == 8 && IsLandTex(b)) || (b == 8 && IsLandTex(a)));
+
+    /// <summary>Smooth value noise in 0..1 from the integer hash, for roughening the blend edge.</summary>
+    private static float ValueNoise(float x, float y)
+    {
+        int xi = (int)MathF.Floor(x), yi = (int)MathF.Floor(y);
+        float fx = x - xi, fy = y - yi;
+        fx = fx * fx * (3f - 2f * fx);
+        fy = fy * fy * (3f - 2f * fy);
+        float top = MathHelper.Lerp(Hash01(xi, yi), Hash01(xi + 1, yi), fx);
+        float bottom = MathHelper.Lerp(Hash01(xi, yi + 1), Hash01(xi + 1, yi + 1), fx);
+        return MathHelper.Lerp(top, bottom, fy);
     }
 
     /// <summary>The atlas UV for a point (u,v) in a tile, mapped into the texture's region and optionally flipped.</summary>
