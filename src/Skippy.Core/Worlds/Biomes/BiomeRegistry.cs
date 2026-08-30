@@ -16,8 +16,30 @@ public static class BiomeRegistry
     {
         Biome.Grassland or Biome.Savanna => GrassColor(tile.Temperature, tile.Moisture),
         Biome.Tundra => TundraColor(tile),
+        // Wooded ground is its own floor, not the canopy swatch, and it darkens
+        // where the stand thickens (see ForestFloor).
+        Biome.TemperateForest => ForestFloor(tile, new Color(98, 134, 72), new Color(52, 66, 40)),
+        Biome.Jungle          => ForestFloor(tile, new Color(76, 130, 60), new Color(30, 70, 40)),
+        Biome.Taiga           => ForestFloor(tile, new Color(102, 118, 92), new Color(58, 76, 58)),
         _ => TopColor(tile.Biome),
     };
+
+    /// <summary>
+    /// The floor of a wood rather than its canopy. Bare and light where the stand is
+    /// thin, it deepens into shaded leaf-litter where the trees crowd in — so the
+    /// ground answers to the same density that decides how many trees stand on it.
+    /// The patch field then dapples it, so the litter reads as textured, not flat.
+    /// </summary>
+    private static Color ForestFloor(in Tile tile, Color open, Color dense)
+    {
+        float shade = Smooth01((tile.VegetationDensity - 0.15f) / 0.6f);
+        Color floor = Color.Lerp(open, dense, shade);
+        float dapple = 0.86f + 0.28f * tile.Patch;
+        return new Color(
+            (int)System.MathF.Min(255f, floor.R * dapple),
+            (int)System.MathF.Min(255f, floor.G * dapple),
+            (int)System.MathF.Min(255f, floor.B * dapple));
+    }
 
     private static readonly Color SnowPatch = new(228, 234, 240);
 

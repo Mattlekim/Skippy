@@ -80,15 +80,27 @@ public sealed class WorldRenderer : IDisposable
     private const int MaxPlantsPerTile = 64;
 
     /// <summary>
-    /// How far from a biome boundary (in climate units) trees are back to full
-    /// density. Inside this band their numbers fall away, so a forest frays into
-    /// the open ground next to it instead of ending on a hard line. Undergrowth is
-    /// left alone — it is the canopy that should thin.
+    /// How far from a biome boundary (in climate units) trees reach full density.
+    /// Inside this band their numbers fall away, so a forest frays into the open
+    /// ground next to it instead of ending on a hard line. Undergrowth is left
+    /// alone — it is the canopy that should thin. Kept tight so the fringe is a
+    /// thin rind and most of a wood is its dense interior.
     /// </summary>
-    private const float TreeEdgeFade = 0.12f;
+    private const float TreeEdgeFade = 0.07f;
 
     /// <summary>Trees never thin below this, so two neighbouring woods don't leave a bald seam.</summary>
     private const float MinTreeEdgeDensity = 0.12f;
+
+    /// <summary>
+    /// Extra tree density added at the very core of a true forest (temperate,
+    /// taiga, jungle), on top of the open-canopy baseline of 1. At the centre a
+    /// wood is (1 + this)× as thick as its edge, so the deep interior packs in;
+    /// open biomes that merely hold a few trees are not boosted.
+    /// </summary>
+    private const float ForestCoreBoost = 1.3f;
+
+    private static bool IsForestBiome(Biome b)
+        => b is Biome.TemperateForest or Biome.Taiga or Biome.Jungle;
 
     /// <summary>Tile-grid overlay: line thickness in iso pixels, and its (premultiplied) colour.</summary>
     private const float GridLineWidth = 1.5f;
@@ -672,9 +684,15 @@ public sealed class WorldRenderer : IDisposable
         float inset = MathF.Min(0.14f, 8f / Iso.TileWidth);
         float span = 1f - 2f * inset;
 
-        // Trees fall away towards the edge of the biome; everything else stays put.
-        float treeDensity = MinTreeEdgeDensity + (1f - MinTreeEdgeDensity) * Smoothstep01(
+        // Trees fall away towards the edge of the biome and pack in towards its
+        // core: this ramps 0 at the boundary to 1 at TreeEdgeFade in. A true forest
+        // then gets a further boost that peaks at the same core, so its centre is
+        // markedly denser than its fringe; open country is left at its baseline.
+        float core = Smoothstep01(
             BiomeClassifier.ClimateEdgeDistance(tile.Temperature, tile.Moisture) / TreeEdgeFade);
+        float treeDensity = MinTreeEdgeDensity + (1f - MinTreeEdgeDensity) * core;
+        if (IsForestBiome(tile.Biome))
+            treeDensity += ForestCoreBoost * core;
 
         // Counts are per base-sized tile and may be fractional — "one tree per twenty
         // tiles" is a rate, not a number. Rounding that would lose it entirely, so
@@ -707,7 +725,8 @@ public sealed class WorldRenderer : IDisposable
                 break;
             case Biome.Taiga:
                 Add(Vegetation.PineTree, 5 + Ri(dens * 6), deadChance: 0.10f);
-                if (rng.Next() > 0.7f) Add(Vegetation.Bush, 1, deadChance: 0.35f);
+                // Undergrowth is sparse in the cold: only the odd frost-bitten shrub.
+                if (rng.Next() > 0.9f) Add(Vegetation.Bush, 1, deadChance: 0.5f);
                 break;
             case Biome.Jungle:
                 Add(Vegetation.PalmTree, 6 + Ri(dens * 6), deadChance: 0.04f);
@@ -728,8 +747,9 @@ public sealed class WorldRenderer : IDisposable
                 if (dens > 0.6f) Add(Vegetation.BroadleafTree, 1, deadChance: 0.30f);
                 break;
             case Biome.Tundra:
-                // Nothing up here keeps a leaf: tundra scrub is bare twigs, always.
-                if (dens > 0.6f || rng.Next() > 0.75f) Add(Vegetation.Bush, 1, deadChance: 1f);
+                // Nothing up here keeps a leaf: tundra scrub is bare twigs, always —
+                // and thin on the ground, only the rare hardy shrub in the frost.
+                if (rng.Next() > 0.92f) Add(Vegetation.Bush, 1, deadChance: 1f);
                 break;
             case Biome.Desert: if (dens > 0.7f) Add(Vegetation.Cactus, dens > 0.88f ? 2 : 1); break;
             case Biome.Rock: if (rng.Next() > 0.6f) Add(Vegetation.Rock, rng.Next() > 0.6f ? 2 : 1); break;
