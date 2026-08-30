@@ -65,18 +65,30 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>Height band over which the land fades out into the water — the softness of the shore edge.</summary>
     private const float CoastFeather = 0.012f;
 
-    /// <summary>The chunk's level field plus a two-tile margin, so the smooth interpolation's 4×4 stencil never leaves it.</summary>
-    private const int FieldStride = Chunk.Size + 4;
+    /// <summary>The chunk's fields plus a four-tile margin, wide enough for the smoothing stencil and the warped biome lookup to never leave it.</summary>
+    private const int FieldStride = Chunk.Size + 8;
+    private const int FieldMargin = 4;
     private readonly float[] _levelField = new float[FieldStride * FieldStride];
 
-    /// <summary>The chunk's continuous height field (same margin), for finding the true waterline within a shore tile.</summary>
+    /// <summary>The chunk's continuous fields (same margin): height for the waterline, climate to classify biomes within a boundary tile.</summary>
     private readonly float[] _heightField = new float[FieldStride * FieldStride];
+    private readonly float[] _tempField = new float[FieldStride * FieldStride];
+    private readonly float[] _moistField = new float[FieldStride * FieldStride];
 
-    /// <summary>Scratch for one tile's sub-vertices while it is being emitted (sized for the finer shore grid).</summary>
-    private readonly Vector2[] _subPos = new Vector2[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
-    private readonly Vector2[] _subUv = new Vector2[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
-    private readonly Vector3[] _subNrm = new Vector3[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
-    private readonly Color[] _subCol = new Color[(CoastSubdiv + 1) * (CoastSubdiv + 1)];
+    /// <summary>A boundary tile is subdivided this fine so its biome edge follows the climate contour smoothly.</summary>
+    private const int BlendSubdiv = 6;
+
+    /// <summary>How far the biome edge is warped off the (very smooth) climate contour so it wanders naturally. In tiles; kept inside the field margin.</summary>
+    private const float BiomeWarpAmp = 1.4f;
+    private const float BiomeWarpFreq = 0.11f;
+
+    /// <summary>Scratch for one tile's sub-vertices while it is being emitted (sized for the finest grid used).</summary>
+    private const int MaxSub = CoastSubdiv > BlendSubdiv ? CoastSubdiv : BlendSubdiv;
+    private readonly Vector2[] _subPos = new Vector2[(MaxSub + 1) * (MaxSub + 1)];
+    private readonly Vector2[] _subUv = new Vector2[(MaxSub + 1) * (MaxSub + 1)];
+    private readonly Vector3[] _subNrm = new Vector3[(MaxSub + 1) * (MaxSub + 1)];
+    private readonly Color[] _subCol = new Color[(MaxSub + 1) * (MaxSub + 1)];
+    private readonly int[] _subTex = new int[(MaxSub + 1) * (MaxSub + 1)];
 
     /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
     private readonly int[] _blendTex = new int[MaxBlendOverlays];
@@ -460,9 +472,20 @@ public sealed class WorldRenderer : IDisposable
             for (int fx = 0; fx < FieldStride; fx++)
             {
                 int i = fy * FieldStride + fx;
-                _levelField[i] = LevelAt(world, ox + fx - 2, oy + fy - 2);
-                _heightField[i] = world.TryGetTile(ox + fx - 2, oy + fy - 2, out Tile ht)
-                    ? ht.Height : WorldConstants.SeaLevel + 0.1f;
+                int wx = ox + fx - FieldMargin, wy = oy + fy - FieldMargin;
+                _levelField[i] = LevelAt(world, wx, wy);
+                if (world.TryGetTile(wx, wy, out Tile ht))
+                {
+                    _heightField[i] = ht.Height;
+                    _tempField[i] = ht.Temperature;
+                    _moistField[i] = ht.Moisture;
+                }
+                else
+                {
+                    _heightField[i] = WorldConstants.SeaLevel + 0.1f;
+                    _tempField[i] = 0.5f;
+                    _moistField[i] = 0.5f;
+                }
             }
 
         // Every vertex of the chunk gets ONE colour, computed from data that belongs
@@ -523,10 +546,13 @@ public sealed class WorldRenderer : IDisposable
                     }
                     else if (!tile.IsWater)
                     {
-                        EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
-                        for (int o = 0; o < overlays; o++)
-                            EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[_blendTex[o]], flipU, flipV,
-                                           _blendW[o * 4], _blendW[o * 4 + 1], _blendW[o * 4 + 2], _blendW[o * 4 + 3], true);
+                        // Interior of a biome: one texture, the cheap single quad. On a
+                        // biome border: subdivide and cut the textures along the climate
+                        // contour (a natural, sub-tile edge).
+                        if (overlays == 0)
+                            EmitSmoothTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV, 1f, 1f, 1f, 1f, false);
+                        else
+                            EmitBlendedLandTile(ox, oy, lx, ly, tx, ty, baseTex, flipU, flipV);
                     }
                     else
                     {
@@ -724,8 +750,8 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>Reads the cached height field by chunk-local tile coordinate, clamped to the margin.</summary>
     private float Hf(int localX, int localY)
     {
-        int fx = Math.Clamp(localX + 2, 0, FieldStride - 1);
-        int fy = Math.Clamp(localY + 2, 0, FieldStride - 1);
+        int fx = Math.Clamp(localX + FieldMargin, 0, FieldStride - 1);
+        int fy = Math.Clamp(localY + FieldMargin, 0, FieldStride - 1);
         return _heightField[fy * FieldStride + fx];
     }
 
@@ -823,21 +849,8 @@ public sealed class WorldRenderer : IDisposable
         return new Vector2(MathHelper.Lerp(tex.U0, tex.U1, u), MathHelper.Lerp(tex.V0, tex.V1, v));
     }
 
-    /// <summary>
-    /// Which of the 12 ground textures a biome wears. Grassland and light woodland also
-    /// break up with the odd patch of flowers so open country is not one flat green.
-    /// Indices are the terrain sheet's row-major order.
-    /// </summary>
-    private static int TerrainTextureIndex(Biome biome, int tx, int ty)
-    {
-        if (biome is Biome.Grassland or Biome.TemperateForest)
-        {
-            uint h = (uint)((tx * 92821) ^ (ty * 68917) ^ 0x5bd1) & 0xFF;
-            if (h < 9) return 7;    // an occasional patch of orange flowers
-            if (h < 24) return 11;  // white-flower meadow
-        }
-        return BiomeTextureIndex[(int)biome];
-    }
+    /// <summary>Which of the 12 ground textures a biome wears. Indices are the terrain sheet's row-major order.</summary>
+    private static int TerrainTextureIndex(Biome biome, int tx, int ty) => BiomeTextureIndex[(int)biome];
 
     /// <summary>Biome → terrain-sheet tile. See the sheet: 0 grass · 1 dirt · 2 snow · 3 dry grass · 4 sand · 5 frost-dirt · 6 rock · 7 orange flowers · 8 deep water · 9 shallow water · 10 swamp · 11 flower meadow.</summary>
     private static readonly int[] BiomeTextureIndex =
@@ -890,10 +903,113 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>Reads the cached level field by chunk-local tile coordinate, clamped to the margin.</summary>
     private float Lf(int localX, int localY)
     {
-        int fx = Math.Clamp(localX + 2, 0, FieldStride - 1);
-        int fy = Math.Clamp(localY + 2, 0, FieldStride - 1);
+        int fx = Math.Clamp(localX + FieldMargin, 0, FieldStride - 1);
+        int fy = Math.Clamp(localY + FieldMargin, 0, FieldStride - 1);
         return _levelField[fy * FieldStride + fx];
     }
+
+    /// <summary>Bilinear sample of a cached field at a chunk-local fractional position (climate is smooth, so bilinear is plenty).</summary>
+    private float SampleField(float[] field, float flx, float fly)
+    {
+        int ix = (int)MathF.Floor(flx), iy = (int)MathF.Floor(fly);
+        float u = flx - ix, v = fly - iy;
+        float a = Ff(field, ix, iy), b = Ff(field, ix + 1, iy);
+        float c = Ff(field, ix, iy + 1), d = Ff(field, ix + 1, iy + 1);
+        return MathHelper.Lerp(MathHelper.Lerp(a, b, u), MathHelper.Lerp(c, d, u), v);
+    }
+
+    private float Ff(float[] field, int localX, int localY)
+    {
+        int fx = Math.Clamp(localX + FieldMargin, 0, FieldStride - 1);
+        int fy = Math.Clamp(localY + FieldMargin, 0, FieldStride - 1);
+        return field[fy * FieldStride + fx];
+    }
+
+    /// <summary>
+    /// The ground texture a point inside a boundary tile belongs to, by classifying the
+    /// biome from the smooth climate there — but sampled through a position warp, so the
+    /// (very low-frequency, near-straight) climate contour the biomes divide on comes out
+    /// as a naturally wandering edge rather than a smooth arc. The warp is a function of
+    /// world position, so two chunks agree on the border they share.
+    /// </summary>
+    private int SubTextureIndex(int ox, int oy, float flx, float fly)
+    {
+        float wx = ox + flx, wy = oy + fly;
+        float dx = (ValueNoise(wx * BiomeWarpFreq, wy * BiomeWarpFreq) - 0.5f) * (2f * BiomeWarpAmp);
+        float dy = (ValueNoise(wx * BiomeWarpFreq + 53.3f, wy * BiomeWarpFreq + 17.1f) - 0.5f) * (2f * BiomeWarpAmp);
+        float sx = flx + dx, sy = fly + dy;
+        Biome b = BiomeClassifier.Classify(SampleField(_heightField, sx, sy),
+                                            SampleField(_tempField, sx, sy),
+                                            SampleField(_moistField, sx, sy));
+        return BiomeTextureIndex[(int)b];
+    }
+
+    /// <summary>
+    /// A land tile straddling a biome border. It is subdivided fine and each sub-vertex is
+    /// classified to its own biome's texture from the smooth climate, so the border runs
+    /// as a natural contour through the tile. The tile's own texture is laid down opaque,
+    /// then every other texture found among the sub-vertices is painted over it, showing
+    /// only where the ground classifies to it — the layers meet along the contour, blurred
+    /// one sub-cell wide by the interpolation, so nothing is a hard tile edge.
+    /// </summary>
+    private void EmitBlendedLandTile(int ox, int oy, int lx, int ly, int tx, int ty, int baseTex, bool flipU, bool flipV)
+    {
+        const int n = BlendSubdiv, span = BlendSubdiv + 1;
+        for (int i = 0; i <= n; i++)
+        {
+            float v = i / (float)n;
+            for (int j = 0; j <= n; j++)
+            {
+                float u = j / (float)n;
+                float flx = lx + u, fly = ly + v;
+                int k = i * span + j;
+                _subPos[k] = Iso.TileToIso(tx + u, ty + v, SmoothLevel(flx, fly));
+                _subNrm[k] = SmoothNormal(flx, fly);
+                _subTex[k] = SubTextureIndex(ox, oy, flx, fly);
+            }
+        }
+
+        EmitTexLayer(n, span, _atlas.Terrain[baseTex], flipU, flipV, baseLayer: true, overlayTex: -1);
+
+        int count = 0;
+        for (int k = 0; k < span * span && count < MaxBlendOverlays; k++)
+        {
+            int st = _subTex[k];
+            if (st == baseTex) continue;
+            bool seen = false;
+            for (int q = 0; q < count; q++) if (_blendTex[q] == st) { seen = true; break; }
+            if (!seen) _blendTex[count++] = st;
+        }
+        for (int o = 0; o < count; o++)
+            EmitTexLayer(n, span, _atlas.Terrain[_blendTex[o]], flipU, flipV, baseLayer: false, overlayTex: _blendTex[o]);
+    }
+
+    /// <summary>Emits one texture layer over the classified sub-grid: opaque for the base, or opaque only where a sub-vertex classifies to <paramref name="overlayTex"/> for an overlay.</summary>
+    private void EmitTexLayer(int n, int span, TextureAtlas.Region tex, bool flipU, bool flipV, bool baseLayer, int overlayTex)
+    {
+        for (int i = 0; i <= n; i++)
+            for (int j = 0; j <= n; j++)
+            {
+                int k = i * span + j;
+                _subUv[k] = TileUv(tex, j / (float)n, i / (float)n, flipU, flipV);
+                _subCol[k] = baseLayer || _subTex[k] == overlayTex ? TerrainWhite : ColorNone;
+            }
+
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+            {
+                int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p01], _subCol[p01], _subNrm[p01], _subUv[p01],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11]);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
+                                  _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
+            }
+    }
+
+    /// <summary>Fully transparent premultiplied — an overlay sub-vertex that does not belong to that layer.</summary>
+    private static readonly Color ColorNone = new(0, 0, 0, 0);
 
     /// <summary>Catmull-Rom spline through <paramref name="p1"/>..<paramref name="p2"/>; passes through the control points.</summary>
     private static float CatmullRom(float p0, float p1, float p2, float p3, float t)
