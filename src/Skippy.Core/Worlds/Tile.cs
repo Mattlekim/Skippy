@@ -75,8 +75,14 @@ public struct Tile
 /// <summary>Tunable constants for terrain shaping and the isometric look.</summary>
 public static class WorldConstants
 {
-    /// <summary>Number of discrete elevation steps above sea level (AoE2-style stepped terrain).</summary>
-    public const int MaxLevel = 15;
+    /// <summary>
+    /// Number of discrete elevation steps above sea level. Set high so the steps are
+    /// fine and the terrain reads as smooth slopes rather than a few tall shelves; the
+    /// per-level height step (Iso.HeightStep) is scaled down to match, so the tallest
+    /// peak reaches the same height as before — there are just far more, smaller steps
+    /// on the way up.
+    /// </summary>
+    public const int MaxLevel = 60;
 
     /// <summary>Normalized height of the sea surface. Below this is water.</summary>
     public const float SeaLevel = 0.42f;

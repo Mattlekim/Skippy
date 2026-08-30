@@ -570,8 +570,10 @@ public sealed class WorldRenderer : IDisposable
     }
 
     /// <summary>Level step to a neighbour at which ground starts to bare to rock, and where it is bare.</summary>
-    private const float CliffStart = 1.5f;
-    private const float CliffFull = 4f;
+    // In level-steps, and scaled with the four-fold finer elevation levels so a cliff
+    // still bares rock at the same real steepness, not a quarter of it.
+    private const float CliffStart = 6f;
+    private const float CliffFull = 16f;
 
     /// <summary>The colour of exposed cliff rock. Cool grey with a little brown in it.</summary>
     private static readonly Color CliffRock = new(112, 104, 94);
@@ -627,7 +629,7 @@ public sealed class WorldRenderer : IDisposable
     }
 
     /// <summary>Height (in level units) fed into the normal per horizontal tile — how steep a slope reads to the light.</summary>
-    private const float NormalRelief = 0.85f;
+    private const float NormalRelief = 0.2125f;
 
     /// <summary>
     /// The world-space surface normal at a mesh vertex, from the slope of the level
