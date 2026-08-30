@@ -32,6 +32,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\Skippy.Core\Assets\trees.png" LogicalName="Skippy.Assets.trees.png" />
     <EmbeddedResource Include="..\Skippy.Core\Assets\bushes.png" LogicalName="Skippy.Assets.bushes.png" />
+    <EmbeddedResource Include="..\Skippy.Core\Assets\terrain.png" LogicalName="Skippy.Assets.terrain.png" />
   </ItemGroup>
 
   <!-- Build the shared content pipeline and copy the .xnb into the output. -->

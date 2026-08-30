@@ -61,7 +61,7 @@ public sealed class WorldRenderer : IDisposable
 
     /// <summary>Scratch for one land tile's (Subdiv+1)² sub-vertices while it is being emitted.</summary>
     private readonly Vector2[] _subPos = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
-    private readonly Color[] _subCol = new Color[(Subdiv + 1) * (Subdiv + 1)];
+    private readonly Vector2[] _subUv = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
     private readonly Vector3[] _subNrm = new Vector3[(Subdiv + 1) * (Subdiv + 1)];
 
     /// <summary>Which side of the waterline each of those corners came down on.</summary>
@@ -442,16 +442,19 @@ public sealed class WorldRenderer : IDisposable
         //
         // The waterline is the exception, so each vertex also records which side it
         // came down on; see the tile loop below.
+        // The per-corner colour/normal cache feeds only the data map views now; the game
+        // view is textured and lit from the smoothed surface, so it never reads it.
         bool biomeView = world.MapView == MapView.Biome;
-        for (int vy = 0; vy < stride; vy++)
+        if (!biomeView)
         {
-            for (int vx = 0; vx < stride; vx++)
-            {
-                int i = vy * stride + vx;
-                _cornerWet[i] = biomeView && VertexIsWet(world, ox + vx, oy + vy);
-                _cornerColors[i] = VertexColor(world, ox + vx, oy + vy, _cornerWet[i]);
-                _cornerNormals[i] = VertexNormal(world, ox + vx, oy + vy);
-            }
+            for (int vy = 0; vy < stride; vy++)
+                for (int vx = 0; vx < stride; vx++)
+                {
+                    int i = vy * stride + vx;
+                    _cornerWet[i] = false;
+                    _cornerColors[i] = VertexColor(world, ox + vx, oy + vy, false);
+                    _cornerNormals[i] = VertexNormal(world, ox + vx, oy + vy);
+                }
         }
 
         Vector2 terrainUv = _atlas.White.CenterUv;
@@ -468,36 +471,35 @@ public sealed class WorldRenderer : IDisposable
                 Vector2 c = CornerPos(world, tx + 1, ty + 1);
                 Vector2 d = CornerPos(world, tx, ty + 1);
 
-                // Water and land do not share a gradient. A vertex on the waterline
-                // holds whichever side won it, and a tile on the far side of that
-                // vertex re-derives the corner from its OWN side instead. Otherwise
-                // the shore is a smear the full width of a tile — barely visible on a
-                // small tile, and a hundred pixels of green-blue haze on a large one.
-                // Everywhere else the shared vertex is used and the terrain stays
-                // seamless.
-                bool wet = biomeView && tile.IsWater;
-                Color cA = CornerColor(world, ly * stride + lx, tx, ty, wet);
-                Color cB = CornerColor(world, ly * stride + lx + 1, tx + 1, ty, wet);
-                Color cC = CornerColor(world, (ly + 1) * stride + lx + 1, tx + 1, ty + 1, wet);
-                Color cD = CornerColor(world, (ly + 1) * stride + lx, tx, ty + 1, wet);
-
-                // Land in the game view is subdivided and smoothed so its slopes flow
-                // between corners instead of creasing at them. Flat water and the data
-                // views keep the cheap single quad — water is flat anyway, and a data
-                // view wants to read the raw per-vertex value, not a smoothed one.
-                if (biomeView && !tile.IsWater)
+                if (biomeView)
                 {
-                    EmitSmoothTile(lx, ly, tx, ty, cA, cB, cC, cD, terrainUv);
+                    // The ground wears its biome's painted texture, tiled one repeat per
+                    // world tile and randomly flipped so the grid does not read as a
+                    // stamp. Colour is left white — the texture carries the colour, the
+                    // sun the shade. Land is subdivided and smoothed so its slopes flow
+                    // between corners; flat water keeps a single quad.
+                    TextureAtlas.Region tex = _atlas.Terrain[TerrainTextureIndex(tile.Biome, tx, ty)];
+                    TileFlip(tx, ty, out bool flipU, out bool flipV);
+
+                    if (!tile.IsWater)
+                        EmitSmoothTile(lx, ly, tx, ty, tex, flipU, flipV);
+                    else
+                        EmitFlatTile(a, b, c, d, tex, flipU, flipV);
                 }
                 else
                 {
+                    // Data views read the raw per-vertex value off a solid fill, so they
+                    // keep the cheap single quad with the ramp colours and no texture.
+                    Color cA = CornerColor(world, ly * stride + lx, tx, ty, false);
+                    Color cB = CornerColor(world, ly * stride + lx + 1, tx + 1, ty, false);
+                    Color cC = CornerColor(world, (ly + 1) * stride + lx + 1, tx + 1, ty + 1, false);
+                    Color cD = CornerColor(world, (ly + 1) * stride + lx, tx, ty + 1, false);
+
                     Vector3 nA = _cornerNormals[ly * stride + lx];
                     Vector3 nB = _cornerNormals[ly * stride + lx + 1];
                     Vector3 nC = _cornerNormals[(ly + 1) * stride + lx + 1];
                     Vector3 nD = _cornerNormals[(ly + 1) * stride + lx];
 
-                    // Fan four triangles around a centre vertex rather than splitting on
-                    // one diagonal, which would bias interpolation and show as a crease.
                     Vector2 m = (a + b + c + d) * 0.25f;
                     Color cM = Average(cA, cB, cC, cD);
                     Vector3 nM = Vector3.Normalize(nA + nB + nC + nD);
@@ -538,15 +540,19 @@ public sealed class WorldRenderer : IDisposable
         return _builder.Upload(neighborMask);
     }
 
+    /// <summary>The white ground draws the texture at its own colour; only the sun shades it.</summary>
+    private static readonly Color TerrainWhite = Color.White;
+
     /// <summary>
     /// Emits one land tile as a <see cref="Subdiv"/>×<see cref="Subdiv"/> grid whose
     /// interior heights and normals come from a smooth (Catmull-Rom) interpolation of
     /// the level field. The interpolation passes exactly through the integer corner
     /// heights, so the tile still meets its neighbours — and the flat water beside it —
-    /// seamlessly; only the ground in between is rounded off. Colour is bilinear across
-    /// the tile's four (already shore-correct) corner colours.
+    /// seamlessly; only the ground in between is rounded off. Each sub-vertex samples the
+    /// tile's ground texture <paramref name="tex"/> once across the whole tile, flipped
+    /// per <paramref name="flipU"/>/<paramref name="flipV"/>.
     /// </summary>
-    private void EmitSmoothTile(int lx, int ly, int tx, int ty, Color cA, Color cB, Color cC, Color cD, Vector2 uv)
+    private void EmitSmoothTile(int lx, int ly, int tx, int ty, TextureAtlas.Region tex, bool flipU, bool flipV)
     {
         const int n = Subdiv, span = Subdiv + 1;
         for (int i = 0; i <= n; i++)
@@ -559,7 +565,7 @@ public sealed class WorldRenderer : IDisposable
                 float level = SmoothLevel(fx, fy);
                 int k = i * span + j;
                 _subPos[k] = Iso.TileToIso(tx + u, ty + v, level);
-                _subCol[k] = BilerpColor(cA, cB, cC, cD, u, v);
+                _subUv[k] = TileUv(tex, u, v, flipU, flipV);
                 _subNrm[k] = SmoothNormal(fx, fy);
             }
         }
@@ -568,13 +574,76 @@ public sealed class WorldRenderer : IDisposable
             for (int j = 0; j < n; j++)
             {
                 int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
-                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00],
-                                  _subPos[p01], _subCol[p01], _subNrm[p01],
-                                  _subPos[p11], _subCol[p11], _subNrm[p11], uv);
-                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00],
-                                  _subPos[p11], _subCol[p11], _subNrm[p11],
-                                  _subPos[p10], _subCol[p10], _subNrm[p10], uv);
+                _builder.Triangle(_subPos[p00], TerrainWhite, _subNrm[p00], _subUv[p00],
+                                  _subPos[p01], TerrainWhite, _subNrm[p01], _subUv[p01],
+                                  _subPos[p11], TerrainWhite, _subNrm[p11], _subUv[p11]);
+                _builder.Triangle(_subPos[p00], TerrainWhite, _subNrm[p00], _subUv[p00],
+                                  _subPos[p11], TerrainWhite, _subNrm[p11], _subUv[p11],
+                                  _subPos[p10], TerrainWhite, _subNrm[p10], _subUv[p10]);
             }
+    }
+
+    /// <summary>A flat (water) tile as two textured triangles, the ground texture stretched once across it.</summary>
+    private void EmitFlatTile(Vector2 a, Vector2 b, Vector2 c, Vector2 d, TextureAtlas.Region tex, bool flipU, bool flipV)
+    {
+        Vector3 up = Vector3.Up;
+        Vector2 uvA = TileUv(tex, 0f, 0f, flipU, flipV);
+        Vector2 uvB = TileUv(tex, 1f, 0f, flipU, flipV);
+        Vector2 uvC = TileUv(tex, 1f, 1f, flipU, flipV);
+        Vector2 uvD = TileUv(tex, 0f, 1f, flipU, flipV);
+        _builder.Triangle(a, TerrainWhite, up, uvA, b, TerrainWhite, up, uvB, c, TerrainWhite, up, uvC);
+        _builder.Triangle(a, TerrainWhite, up, uvA, c, TerrainWhite, up, uvC, d, TerrainWhite, up, uvD);
+    }
+
+    /// <summary>The atlas UV for a point (u,v) in a tile, mapped into the texture's region and optionally flipped.</summary>
+    private static Vector2 TileUv(in TextureAtlas.Region tex, float u, float v, bool flipU, bool flipV)
+    {
+        if (flipU) u = 1f - u;
+        if (flipV) v = 1f - v;
+        return new Vector2(MathHelper.Lerp(tex.U0, tex.U1, u), MathHelper.Lerp(tex.V0, tex.V1, v));
+    }
+
+    /// <summary>
+    /// Which of the 12 ground textures a biome wears. Grassland and light woodland also
+    /// break up with the odd patch of flowers so open country is not one flat green.
+    /// Indices are the terrain sheet's row-major order.
+    /// </summary>
+    private static int TerrainTextureIndex(Biome biome, int tx, int ty)
+    {
+        if (biome is Biome.Grassland or Biome.TemperateForest)
+        {
+            uint h = (uint)((tx * 92821) ^ (ty * 68917) ^ 0x5bd1) & 0xFF;
+            if (h < 9) return 7;    // an occasional patch of orange flowers
+            if (h < 24) return 11;  // white-flower meadow
+        }
+        return BiomeTextureIndex[(int)biome];
+    }
+
+    /// <summary>Biome → terrain-sheet tile. See the sheet: 0 grass · 1 dirt · 2 snow · 3 dry grass · 4 sand · 5 frost-dirt · 6 rock · 7 orange flowers · 8 deep water · 9 shallow water · 10 swamp · 11 flower meadow.</summary>
+    private static readonly int[] BiomeTextureIndex =
+    {
+        8,  // Ocean
+        9,  // ShallowWater
+        4,  // Beach → sand
+        0,  // Grassland → grass
+        3,  // Savanna → dry grass
+        4,  // Desert → sand
+        0,  // TemperateForest → grass
+        1,  // Taiga → dirt
+        5,  // Tundra → frost-dirt
+        2,  // Snow
+        11, // Jungle → flower meadow (lush)
+        10, // Swamp
+        6,  // Rock
+    };
+
+    /// <summary>A deterministic per-tile flip in u and/or v, so a repeating texture doesn't read as a stamped grid.</summary>
+    private static void TileFlip(int tx, int ty, out bool flipU, out bool flipV)
+    {
+        uint h = (uint)((tx * 40503) ^ (ty * 20693) ^ 0x1f3d);
+        h ^= h >> 13;
+        flipU = (h & 1u) != 0;
+        flipV = (h & 2u) != 0;
     }
 
     /// <summary>A smoothly interpolated elevation level at a chunk-local fractional position (bicubic Catmull-Rom).</summary>
@@ -615,10 +684,6 @@ public sealed class WorldRenderer : IDisposable
                        + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2
                        + (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
     }
-
-    /// <summary>Bilinear blend of a tile's four corner colours: A top-left, B top-right, C bottom-right, D bottom-left.</summary>
-    private static Color BilerpColor(Color a, Color b, Color c, Color d, float u, float v)
-        => Color.Lerp(Color.Lerp(a, b, u), Color.Lerp(d, c, u), v);
 
     /// <summary>
     /// The debug tile grid: one line along every tile edge, following the same
