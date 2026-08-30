@@ -15,7 +15,6 @@ public static class BiomeRegistry
     public static Color SurfaceColor(in Tile tile) => tile.Biome switch
     {
         Biome.Grassland or Biome.Savanna => GrassColor(tile.Temperature, tile.Moisture),
-        Biome.Tundra => TundraColor(tile),
         // Wooded ground is its own floor, not the canopy swatch, and it darkens
         // where the stand thickens (see ForestFloor).
         Biome.TemperateForest => ForestFloor(tile, new Color(98, 134, 72), new Color(52, 66, 40)),
@@ -39,21 +38,6 @@ public static class BiomeRegistry
             (int)System.MathF.Min(255f, floor.R * dapple),
             (int)System.MathF.Min(255f, floor.G * dapple),
             (int)System.MathF.Min(255f, floor.B * dapple));
-    }
-
-    private static readonly Color SnowPatch = new(228, 234, 240);
-
-    /// <summary>
-    /// Snow lies on tundra in drifts, not as an even coat. The patch field decides
-    /// where it settles, and the colder the ground the lower the bar for it lying
-    /// at all — so the far north is mostly white and the fringe is mostly bare.
-    /// </summary>
-    private static Color TundraColor(in Tile tile)
-    {
-        float cold = Smooth01((0.24f - tile.Temperature) / 0.24f);
-        float threshold = 0.62f - 0.34f * cold;
-        return Color.Lerp(TopColor(Biome.Tundra), SnowPatch,
-                          Smooth01((tile.Patch - threshold) / 0.16f));
     }
 
     private static readonly Color DryGrass = new(206, 196, 88); // sun-bleached yellow
@@ -89,8 +73,7 @@ public static class BiomeRegistry
         Biome.Desert          => new Color(216, 196, 132),
         Biome.TemperateForest => new Color(78, 126, 66),
         Biome.Taiga           => new Color(74, 118, 104),
-        Biome.Tundra          => new Color(150, 150, 138),
-        Biome.Snow            => new Color(236, 240, 244),
+        Biome.Tundra          => new Color(196, 198, 194), // frozen ground, pale with frost
         Biome.Jungle          => new Color(56, 128, 58),
         Biome.Swamp           => new Color(84, 104, 72),
         Biome.Rock            => new Color(120, 116, 112),

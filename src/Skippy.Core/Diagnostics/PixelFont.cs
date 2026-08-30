@@ -39,6 +39,10 @@ public sealed class PixelFont : IDisposable
         Draw(sb, text, at, scale, color);
     }
 
+    /// <summary>Fills a rectangle with the font's own white pixel — for panels and rules behind text.</summary>
+    public void Fill(SpriteBatch sb, Rectangle rect, Color color)
+        => sb.Draw(_pixel, rect, color);
+
     public void Draw(SpriteBatch sb, string text, Vector2 at, int scale, Color color)
     {
         var cell = new Vector2(scale);
@@ -75,6 +79,9 @@ public sealed class PixelFont : IDisposable
         '9' => new byte[] { 0b111, 0b101, 0b111, 0b001, 0b111 },
         '-' => new byte[] { 0b000, 0b000, 0b111, 0b000, 0b000 },
         '.' => new byte[] { 0b000, 0b000, 0b000, 0b000, 0b010 },
+        ':' => new byte[] { 0b000, 0b010, 0b000, 0b010, 0b000 },
+        '<' => new byte[] { 0b001, 0b010, 0b100, 0b010, 0b001 },
+        '>' => new byte[] { 0b100, 0b010, 0b001, 0b010, 0b100 },
         'A' => new byte[] { 0b010, 0b101, 0b111, 0b101, 0b101 },
         'B' => new byte[] { 0b110, 0b101, 0b110, 0b101, 0b110 },
         'C' => new byte[] { 0b011, 0b100, 0b100, 0b100, 0b011 },

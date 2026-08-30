@@ -4,8 +4,9 @@ namespace Skippy.Core.Worlds.Generation;
 
 /// <summary>
 /// Maps a tile's height, temperature and moisture to a <see cref="Biome"/> using
-/// a Whittaker-style climate diagram. Water (by height) and rock/snow (by height)
+/// a Whittaker-style climate diagram. Water (by height) and bare rock (by height)
 /// override the climate lookup; everything else is a temperature × moisture grid.
+/// Snow is not among them — it falls on whatever is below freezing.
 ///
 /// The grid is held as data rather than nested ifs so that
 /// <see cref="ClimateEdgeDistance"/> can measure how far a tile sits from the
@@ -33,7 +34,7 @@ public static class BiomeClassifier
     /// <summary>The biome for each (temperature band, moisture band) cell.</summary>
     private static readonly Biome[][] ClimateBiomes =
     {
-        new[] { Biome.Tundra,    Biome.Taiga,           Biome.Snow },
+        new[] { Biome.Tundra,    Biome.Taiga,           Biome.Taiga },
         new[] { Biome.Grassland, Biome.TemperateForest, Biome.Swamp },
         new[] { Biome.Savanna,   Biome.Grassland,       Biome.Jungle },
         new[] { Biome.Desert,    Biome.Savanna,         Biome.Jungle },
@@ -52,9 +53,11 @@ public static class BiomeClassifier
             return Biome.Beach;
         }
 
-        // High altitude: bare rock, capped with snow where it's cold.
-        if (height > WorldConstants.SnowLine)
-            return temperature < 0.35f ? Biome.Snow : Biome.Rock;
+        // High altitude: bare rock. Whether it wears a white cap is not decided here —
+        // snow lies on whatever is below freezing, and a peak is colder than the
+        // country around it because of the lapse rate, so the caps come out on their own.
+        if (height > WorldConstants.RockLine)
+            return Biome.Rock;
 
         int band = TemperatureBandOf(temperature);
         float[] wet = MoistureBands[band];

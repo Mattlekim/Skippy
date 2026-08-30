@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -33,12 +34,20 @@ public sealed class HudOverlay : IDisposable
 
     /// <summary>Call once per rendered frame; draws the read-out and advances the FPS measurement.</summary>
     public void Draw(SpriteBatch sb, Viewport viewport, params string[] statusLines)
+        => Draw(sb, viewport, (IReadOnlyList<string>)statusLines);
+
+    /// <summary>
+    /// As above, from a list the caller builds up — which is how a read-out that grows a
+    /// section at a time (the tile under the pointer, the selected mob) is put together
+    /// without a new array per frame.
+    /// </summary>
+    public void Draw(SpriteBatch sb, Viewport viewport, IReadOnlyList<string> statusLines)
     {
         Sample();
 
         sb.Begin(SpriteSortMode.Deferred, BlendState.AlphaBlend, SamplerState.PointClamp);
         DrawLine(sb, viewport, "FPS " + _fps, 0);
-        for (int i = 0; i < statusLines.Length; i++)
+        for (int i = 0; i < statusLines.Count; i++)
             DrawLine(sb, viewport, statusLines[i], i + 1);
         sb.End();
     }
