@@ -15,7 +15,6 @@ namespace Skippy.Android;
 [Activity(
     Label = "Skippy",
     MainLauncher = true,
-    Icon = "@mipmap/ic_launcher",
     AlwaysRetainTaskState = true,
     LaunchMode = LaunchMode.SingleInstance,
     ScreenOrientation = ScreenOrientation.SensorLandscape,
