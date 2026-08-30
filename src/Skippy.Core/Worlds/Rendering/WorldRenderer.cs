@@ -90,6 +90,9 @@ public sealed class WorldRenderer : IDisposable
     private readonly Color[] _subCol = new Color[(MaxSub + 1) * (MaxSub + 1)];
     private readonly int[] _subTex = new int[(MaxSub + 1) * (MaxSub + 1)];
 
+    /// <summary>Per-sub-vertex master alpha: 1 inland, fading to 0 across the waterline on a shore tile.</summary>
+    private readonly float[] _subA = new float[(MaxSub + 1) * (MaxSub + 1)];
+
     /// <summary>Scratch for the textures blended over a boundary tile, and their per-corner weights.</summary>
     private readonly int[] _blendTex = new int[MaxBlendOverlays];
     private readonly float[] _blendW = new float[MaxBlendOverlays * 4];
@@ -541,8 +544,9 @@ public sealed class WorldRenderer : IDisposable
                     if (!tile.IsWater && IsCoastalLand(lx, ly))
                     {
                         // A land tile that touches the sea: cut it along the real waterline
-                        // so the shore rounds through the tile instead of stepping round it.
-                        EmitCoastalTile(lx, ly, tx, ty, _atlas.Terrain[baseTex], flipU, flipV);
+                        // so the shore rounds through the tile, and blend its land the same
+                        // as anywhere else so the inland edge is soft too.
+                        EmitCoastalTile(ox, oy, lx, ly, tx, ty, baseTex, flipU, flipV);
                     }
                     else if (!tile.IsWater)
                     {
@@ -695,10 +699,11 @@ public sealed class WorldRenderer : IDisposable
     /// A shore tile: a flat sheet of shallow water across the tile, then the land laid on
     /// top and faded out (per sub-vertex) exactly where the smoothly-interpolated height
     /// drops below sea level. The land's own edge is therefore the real waterline — a
-    /// rounded curve through the tile — and the water shows through beyond it. Subdivided
-    /// fine so that curve is smooth, and lit and textured like any other ground.
+    /// rounded curve through the tile — with the water showing through beyond it. The land
+    /// itself is still blended between biomes, so its inland edge (say sand into grass) is
+    /// as soft as anywhere else.
     /// </summary>
-    private void EmitCoastalTile(int lx, int ly, int tx, int ty, TextureAtlas.Region land, bool flipU, bool flipV)
+    private void EmitCoastalTile(int ox, int oy, int lx, int ly, int tx, int ty, int baseTex, bool flipU, bool flipV)
     {
         // Shallow water, flat at sea level, filling the whole tile behind the land.
         Vector2 a0 = Iso.TileToIso(tx, ty, 0f), b0 = Iso.TileToIso(tx + 1, ty, 0f);
@@ -706,33 +711,8 @@ public sealed class WorldRenderer : IDisposable
         EmitFlatTile(a0, b0, c0, d0, tx, ty, _atlas.Terrain[9], flipU, flipV, 1f, 1f, 1f, 1f, false);
 
         const int n = CoastSubdiv, span = CoastSubdiv + 1;
-        for (int i = 0; i <= n; i++)
-        {
-            float v = i / (float)n;
-            for (int j = 0; j <= n; j++)
-            {
-                float u = j / (float)n;
-                float fx = lx + u, fy = ly + v;
-                int k = i * span + j;
-                _subPos[k] = Iso.TileToIso(tx + u, ty + v, SmoothLevel(fx, fy));
-                _subUv[k] = TileUv(land, u, v, flipU, flipV);
-                _subNrm[k] = SmoothNormal(fx, fy);
-                float above = (SmoothHeight(fx, fy) - WorldConstants.SeaLevel) / CoastFeather;
-                _subCol[k] = TerrainWhite * Smoothstep01(above);
-            }
-        }
-
-        for (int i = 0; i < n; i++)
-            for (int j = 0; j < n; j++)
-            {
-                int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
-                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
-                                  _subPos[p01], _subCol[p01], _subNrm[p01], _subUv[p01],
-                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11]);
-                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00], _subUv[p00],
-                                  _subPos[p11], _subCol[p11], _subNrm[p11], _subUv[p11],
-                                  _subPos[p10], _subCol[p10], _subNrm[p10], _subUv[p10]);
-            }
+        FillSubGrid(ox, oy, lx, ly, tx, ty, n, span, coastal: true);
+        EmitLandLayers(baseTex, flipU, flipV, n, span);
     }
 
     /// <summary>A smoothly interpolated continuous height at a chunk-local fractional position (bicubic Catmull-Rom).</summary>
@@ -955,6 +935,17 @@ public sealed class WorldRenderer : IDisposable
     private void EmitBlendedLandTile(int ox, int oy, int lx, int ly, int tx, int ty, int baseTex, bool flipU, bool flipV)
     {
         const int n = BlendSubdiv, span = BlendSubdiv + 1;
+        FillSubGrid(ox, oy, lx, ly, tx, ty, n, span, coastal: false);
+        EmitLandLayers(baseTex, flipU, flipV, n, span);
+    }
+
+    /// <summary>
+    /// Fills the sub-vertex grid — position, normal, classified texture, and master alpha
+    /// — for a land tile. On a shore tile the alpha fades to 0 across the waterline (so the
+    /// land is cut there); everywhere else it is 1.
+    /// </summary>
+    private void FillSubGrid(int ox, int oy, int lx, int ly, int tx, int ty, int n, int span, bool coastal)
+    {
         for (int i = 0; i <= n; i++)
         {
             float v = i / (float)n;
@@ -966,18 +957,30 @@ public sealed class WorldRenderer : IDisposable
                 _subPos[k] = Iso.TileToIso(tx + u, ty + v, SmoothLevel(flx, fly));
                 _subNrm[k] = SmoothNormal(flx, fly);
                 _subTex[k] = SubTextureIndex(ox, oy, flx, fly);
+                _subA[k] = coastal
+                    ? Smoothstep01((SmoothHeight(flx, fly) - WorldConstants.SeaLevel) / CoastFeather)
+                    : 1f;
             }
         }
+    }
 
+    /// <summary>
+    /// Paints the classified sub-grid: the tile's own texture opaque as a base, then every
+    /// other land texture found among the sub-vertices over it, each showing only where the
+    /// ground classifies to it. The whole thing is scaled by the master alpha, so a shore
+    /// tile's blended land still fades out at the waterline.
+    /// </summary>
+    private void EmitLandLayers(int baseTex, bool flipU, bool flipV, int n, int span)
+    {
         EmitTexLayer(n, span, _atlas.Terrain[baseTex], flipU, flipV, baseLayer: true, overlayTex: -1);
 
         int count = 0;
         for (int k = 0; k < span * span && count < MaxBlendOverlays; k++)
         {
             int st = _subTex[k];
-            // Land never blends to a water texture: where the warped climate dips below
-            // the sea the sub-vertex just keeps the tile's own (land) texture. The real
-            // waterline is the shore tiles' job, cut cleanly there.
+            // Land never blends to a water texture: where the warped climate dips below the
+            // sea the sub-vertex just keeps the tile's own (land) texture. The real
+            // waterline is the shore cut's job.
             if (st == baseTex || !CanBlend(baseTex, st)) continue;
             bool seen = false;
             for (int q = 0; q < count; q++) if (_blendTex[q] == st) { seen = true; break; }
@@ -987,7 +990,7 @@ public sealed class WorldRenderer : IDisposable
             EmitTexLayer(n, span, _atlas.Terrain[_blendTex[o]], flipU, flipV, baseLayer: false, overlayTex: _blendTex[o]);
     }
 
-    /// <summary>Emits one texture layer over the classified sub-grid: opaque for the base, or opaque only where a sub-vertex classifies to <paramref name="overlayTex"/> for an overlay.</summary>
+    /// <summary>Emits one texture layer over the classified sub-grid: opaque for the base, or opaque only where a sub-vertex classifies to <paramref name="overlayTex"/> for an overlay — all scaled by the per-sub-vertex master alpha.</summary>
     private void EmitTexLayer(int n, int span, TextureAtlas.Region tex, bool flipU, bool flipV, bool baseLayer, int overlayTex)
     {
         for (int i = 0; i <= n; i++)
@@ -995,7 +998,7 @@ public sealed class WorldRenderer : IDisposable
             {
                 int k = i * span + j;
                 _subUv[k] = TileUv(tex, j / (float)n, i / (float)n, flipU, flipV);
-                _subCol[k] = baseLayer || _subTex[k] == overlayTex ? TerrainWhite : ColorNone;
+                _subCol[k] = (baseLayer || _subTex[k] == overlayTex ? TerrainWhite : ColorNone) * _subA[k];
             }
 
         for (int i = 0; i < n; i++)
