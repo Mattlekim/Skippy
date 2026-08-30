@@ -681,12 +681,12 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>A land tile is coastal if it is above the sea but at least one of its eight neighbours is under it.</summary>
     private bool IsCoastalLand(int lx, int ly)
     {
-        int c = (ly + 2) * FieldStride + (lx + 2);
+        int c = (ly + FieldMargin) * FieldStride + (lx + FieldMargin);
         if (_heightField[c] < WorldConstants.SeaLevel)
             return false;
         for (int dy = -1; dy <= 1; dy++)
             for (int dx = -1; dx <= 1; dx++)
-                if (_heightField[(ly + 2 + dy) * FieldStride + (lx + 2 + dx)] < WorldConstants.SeaLevel)
+                if (_heightField[(ly + FieldMargin + dy) * FieldStride + (lx + FieldMargin + dx)] < WorldConstants.SeaLevel)
                     return true;
         return false;
     }
@@ -975,7 +975,10 @@ public sealed class WorldRenderer : IDisposable
         for (int k = 0; k < span * span && count < MaxBlendOverlays; k++)
         {
             int st = _subTex[k];
-            if (st == baseTex) continue;
+            // Land never blends to a water texture: where the warped climate dips below
+            // the sea the sub-vertex just keeps the tile's own (land) texture. The real
+            // waterline is the shore tiles' job, cut cleanly there.
+            if (st == baseTex || !CanBlend(baseTex, st)) continue;
             bool seen = false;
             for (int q = 0; q < count; q++) if (_blendTex[q] == st) { seen = true; break; }
             if (!seen) _blendTex[count++] = st;
