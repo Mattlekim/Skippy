@@ -45,10 +45,10 @@ jobs:
 
       - name: Build Android APK
         # global.json rolls forward to the latest major SDK (currently .NET 10),
-        # under which net8.0-android is flagged EOL (NETSDK1202) and errors the
-        # build. The target framework is still fully supported for building, so
-        # opt out of the end-of-life check.
-        run: dotnet build src/Skippy.Android -c Release -f net8.0-android -p:CheckEolTargetFramework=false
+        # under which the net8.0-android workload is flagged out-of-support and
+        # errors the build (NETSDK1202) during restore. It still builds fine, so
+        # opt out of both the EOL-workload and EOL-framework checks.
+        run: dotnet build src/Skippy.Android -c Release -f net8.0-android -p:CheckEolWorkloads=false -p:CheckEolTargetFramework=false
 
   # Optional: publish the browser preview to GitHub Pages on pushes to main.
   # Enable Pages in the repo settings (Source: GitHub Actions) to use this.
