@@ -23,6 +23,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private readonly PerlinNoise _moisture;
     private readonly PerlinNoise _vegetation;
     private readonly PerlinNoise _patch;
+    private readonly PerlinNoise _mountains;
     private readonly RiverNetwork _rivers;
     private readonly List<RiverNetwork.RiverPath> _riverScratch = new();
 
@@ -59,12 +60,62 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         _moisture = new PerlinNoise(seed * 17 + 91);
         _vegetation = new PerlinNoise(seed * 7 + 53);
         _patch = new PerlinNoise(seed * 13 + 41);
+        _mountains = new PerlinNoise(seed * 101 + 5);
         _rivers = new RiverNetwork(seed, HeightAt);
     }
 
-    /// <summary>The shaped terrain height at a world tile — the field rivers run down.</summary>
-    private float HeightAt(int wx, int wy)
-        => ShapeHeight(_height.Fractal01(wx * HeightScale, wy * HeightScale, octaves: 5));
+    // ---- mountains ---------------------------------------------------------
+    // A low-frequency mask marks out mountain ranges; inside them, ground that is
+    // already high is lifted hard into peaks. So ranges rise where the land was
+    // climbing anyway — leaving the lowlands and their biomes untouched — and their
+    // flanks come out steep, which is what the renderer paints as cliff rock.
+    private const float MountainScale = 0.006f;   // where ranges sit
+    private const float RidgeScale = 0.045f;      // crest/cleft spacing within a range
+    private const float MountainThreshold = 0.58f;
+    private const float MountainBand = 0.22f;
+    private const float MountainFoot = 0.55f;     // only ground above this is uplifted
+    // How hard the crests are pushed up. Kept well below the headroom to the cap on
+    // purpose: if the uplift saturated the height at 1.0, every crest would quantize
+    // to the same top elevation level and the range would read as one flat plateau.
+    // At this strength a crest lands several levels above its neighbouring clefts, so
+    // the range comes out as stepped crags with steep faces instead of a mesa.
+    private const float MountainHeight = 0.42f;
+
+    /// <summary>
+    /// Terrain height with mountain uplift folded in — the one field both the world
+    /// and its rivers are built from, so they agree on where the high ground is.
+    /// </summary>
+    private float TerrainHeight(int wx, int wy)
+    {
+        float h = ShapeHeight(_height.Fractal01(wx * HeightScale, wy * HeightScale, octaves: 5));
+        float inRange = Smooth01((_mountains.Fractal01(wx * MountainScale, wy * MountainScale, octaves: 4)
+                                  - MountainThreshold) / MountainBand);
+        float highland = Smooth01((h - MountainFoot) / 0.25f);
+        // Ridged detail so a range rises as crags and clefts rather than a flat cap:
+        // it is the clefts biting down between crests that give the flanks the steep,
+        // rock-baring faces the renderer draws as cliffs. Squared to sharpen them.
+        float ridged = Ridged(wx * RidgeScale, wy * RidgeScale, octaves: 4);
+        ridged *= ridged;
+        return Clamp01(h + MountainHeight * inRange * highland * ridged);
+    }
+
+    /// <summary>Ridged fractal noise in 0..1: sharp crests where the base noise crosses zero.</summary>
+    private float Ridged(float x, float y, int octaves)
+    {
+        float sum = 0f, amp = 1f, freq = 1f, norm = 0f;
+        for (int i = 0; i < octaves; i++)
+        {
+            float r = 1f - MathF.Abs(_mountains.Sample(x * freq, y * freq));
+            sum += r * r * amp;
+            norm += amp;
+            amp *= 0.5f;
+            freq *= 2f;
+        }
+        return sum / norm;
+    }
+
+    /// <summary>The terrain height at a world tile — the field rivers run down.</summary>
+    private float HeightAt(int wx, int wy) => TerrainHeight(wx, wy);
 
     public void Generate(Chunk chunk)
     {
@@ -75,8 +126,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
                 int wx = chunk.OriginX + lx;
                 int wy = chunk.OriginY + ly;
 
-                float h = _height.Fractal01(wx * HeightScale, wy * HeightScale, octaves: 5);
-                h = ShapeHeight(h);
+                float h = TerrainHeight(wx, wy);
 
                 float baseTemp = Spread(_temperature.Fractal01(wx * TemperatureScale, wy * TemperatureScale, ClimateOctaves));
                 float moisture = Spread(_moisture.Fractal01(wx * MoistureScale, wy * MoistureScale, ClimateOctaves));

@@ -34,3 +34,4 @@ Thumbs.db
 # ---- Tool restore ----
 # (keep .config/dotnet-tools.json tracked; ignore restored tool binaries)
 .dotnet/
+web-dist/

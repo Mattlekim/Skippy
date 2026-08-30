@@ -21,7 +21,7 @@ public static class Iso
 {
     /// <summary>The tile size the elevation step and scatter densities were authored against.</summary>
     public const int BaseTileWidth = 64;
-    private const float BaseHeightStep = 14f;
+    private const float BaseHeightStep = 19f;
 
     public const int MinTileWidth = 16;
     public const int MaxTileWidth = 512;
