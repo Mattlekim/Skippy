@@ -42,7 +42,8 @@ jobs:
       # (NETSDK1202). Pin this job to the .NET 8 SDK just for CI — this only
       # rewrites the checked-out copy, never the committed global.json.
       - name: Pin .NET 8 SDK for the Android build
-        run: echo '{ "sdk": { "version": "8.0.100", "rollForward": "latestFeature" } }' > global.json
+        run: |
+          echo '{ "sdk": { "version": "8.0.100", "rollForward": "latestFeature" } }' > global.json
 
       - name: Install Android workload
         run: dotnet workload install android
