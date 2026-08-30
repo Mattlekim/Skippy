@@ -27,9 +27,10 @@ public static class Iso
     /// This and <see cref="TileAspect"/> together set the camera's apparent pitch: a
     /// tall step over a foreshortened ground plane is a low, tilted-back view in which
     /// hills and mountains stand up off the map, rather than a near-top-down one that
-    /// flattens them. Turned up from the old 19 so a mountain reads as a mountain.
+    /// flattens them. High enough that a mountain reads as a mountain, but no higher —
+    /// past this the jump from one level to the next starts to read as a wall.
     /// </summary>
-    private const float BaseHeightStep = 30f;
+    private const float BaseHeightStep = 21f;
 
     /// <summary>
     /// The ground diamond's height as a fraction of its width. 0.5 is a textbook 2:1
@@ -76,12 +77,13 @@ public static class Iso
 
     /// <summary>
     /// How much extra lift each level above <see cref="HighlandStart"/> gets, as a
-    /// multiple of <see cref="HeightStep"/>. At 2.2 a highland level rises 3.2× as far
-    /// as a lowland one, so the upper layers of a mountain pull apart from each other
-    /// and from the ground below — the peak gains height and, more to the point,
-    /// definition between its tiers instead of stacking flat, evenly-spaced shelves.
+    /// multiple of <see cref="HeightStep"/>. At 1.0 a highland level rises twice as far
+    /// as a lowland one, so the upper layers of a mountain still pull apart and keep
+    /// their tiers distinct — but the step stays a slope, not a cliff wall. (It was
+    /// dialled back from 2.2 once the sun lighting started throwing each step into
+    /// relief and the old exaggeration read as too big a jump.)
     /// </summary>
-    private const float HighlandGain = 2.2f;
+    private const float HighlandGain = 1.0f;
 
     /// <summary>
     /// Screen pixels a tile at <paramref name="level"/> is lifted up the screen. Linear
