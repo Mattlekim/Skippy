@@ -36,6 +36,7 @@
   <ItemGroup>
     <EmbeddedResource Include="..\Skippy.Core\Assets\trees.png" LogicalName="Skippy.Assets.trees.png" />
     <EmbeddedResource Include="..\Skippy.Core\Assets\bushes.png" LogicalName="Skippy.Assets.bushes.png" />
+    <EmbeddedResource Include="..\Skippy.Core\Assets\terrain.png" LogicalName="Skippy.Assets.terrain.png" />
   </ItemGroup>
 
   <!-- Content is compiled to .xnb and packed as Android assets. -->

@@ -51,6 +51,12 @@ public sealed class TextureAtlas : IDisposable
     public Region White { get; }
     public Region Disc { get; }
 
+    /// <summary>The 12 painted ground textures, in the sheet's row-major order (see the biome map in <see cref="WorldRenderer"/>).</summary>
+    public IReadOnlyList<Region> Terrain { get; }
+
+    /// <summary>Columns and rows the terrain sheet is cut into, and the wrap-around margin baked around each tile.</summary>
+    private const int TerrainCols = 4, TerrainRows = 3, TerrainPad = 8;
+
     /// <summary>Living conifers, living broadleaves, and standing deadwood.</summary>
     public IReadOnlyList<Region> Conifers { get; }
     public IReadOnlyList<Region> Broadleaves { get; }
@@ -99,14 +105,30 @@ public sealed class TextureAtlas : IDisposable
         List<List<Piece>> trees = LoadSheet(gd, "Skippy.Assets.trees.png", TreeAtlasHeight);
         List<List<Piece>> bushes = LoadSheet(gd, "Skippy.Assets.bushes.png", BushAtlasHeight);
 
+        // The ground textures, cut from a plain grid (no card to key out), each wrapped
+        // by a margin so the atlas gutter carries the opposite edge — that is what lets a
+        // tile repeat seamlessly across the world under linear filtering.
+        List<Piece> terrain = LoadTerrainSheet(gd, "Skippy.Assets.terrain.png");
+
         var all = new List<Piece> { white, disc };
         foreach (List<Piece> band in trees) all.AddRange(band);
         foreach (List<Piece> band in bushes) all.AddRange(band);
+        all.AddRange(terrain);
 
         Texture = Pack(gd, all, out int atlasWidth, out int atlasHeight);
 
         White = new Region(white.Placed, atlasWidth, atlasHeight);
         Disc = new Region(disc.Placed, atlasWidth, atlasHeight);
+
+        var terrainRegions = new List<Region>(terrain.Count);
+        foreach (Piece p in terrain)
+        {
+            // The sampled region is the tile itself, inside its wrap margin.
+            var inner = new Rectangle(p.Placed.X + TerrainPad, p.Placed.Y + TerrainPad,
+                                      p.Width - 2 * TerrainPad, p.Height - 2 * TerrainPad);
+            terrainRegions.Add(new Region(inner, atlasWidth, atlasHeight));
+        }
+        Terrain = terrainRegions;
 
         // trees.png: bare shrubs, then standing deadwood, then living trees.
         // Within the living row the sheet alternates conifer / broadleaf.
@@ -144,7 +166,50 @@ public sealed class TextureAtlas : IDisposable
         return regions;
     }
 
-    // ---- loading and cutting up a sheet ---------------------------------------
+    // ---- loading the ground textures ------------------------------------------
+
+    /// <summary>
+    /// Cuts the terrain sheet into its <see cref="TerrainCols"/>×<see cref="TerrainRows"/>
+    /// grid of ground textures. Unlike the sprite sheets these are full-bleed and opaque,
+    /// so there is no background to key out and no gaps to hunt for — just an even grid.
+    /// Each tile is copied into a piece with a <see cref="TerrainPad"/> margin filled by
+    /// wrapping the tile's opposite edge, so once packed the gutter around it continues
+    /// the texture instead of fading to nothing, and the tile stays seamless when it
+    /// repeats across the ground.
+    /// </summary>
+    private static List<Piece> LoadTerrainSheet(GraphicsDevice gd, string resource)
+    {
+        using Stream stream = typeof(TextureAtlas).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidOperationException($"Embedded asset '{resource}' is missing.");
+
+        using Texture2D sheet = Texture2D.FromStream(gd, stream);
+        var src = new Color[sheet.Width * sheet.Height];
+        sheet.GetData(src);
+        int sw = sheet.Width, tw = sw / TerrainCols, th = sheet.Height / TerrainRows;
+
+        var pieces = new List<Piece>(TerrainCols * TerrainRows);
+        for (int r = 0; r < TerrainRows; r++)
+        {
+            for (int c = 0; c < TerrainCols; c++)
+            {
+                int pw = tw + 2 * TerrainPad, ph = th + 2 * TerrainPad;
+                var outPx = new Color[pw * ph];
+                for (int y = 0; y < ph; y++)
+                {
+                    int syt = ((y - TerrainPad) % th + th) % th; // wrap into the tile
+                    for (int x = 0; x < pw; x++)
+                    {
+                        int sxt = ((x - TerrainPad) % tw + tw) % tw;
+                        outPx[y * pw + x] = src[(r * th + syt) * sw + (c * tw + sxt)];
+                    }
+                }
+                pieces.Add(new Piece { Pixels = outPx, Width = pw, Height = ph });
+            }
+        }
+        return pieces;
+    }
+
+    // ---- loading and cutting up a sprite sheet --------------------------------
 
     private static List<List<Piece>> LoadSheet(GraphicsDevice gd, string resource, int targetHeight)
     {

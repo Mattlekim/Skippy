@@ -61,6 +61,24 @@ public sealed class MeshBuilder
     }
 
     /// <summary>
+    /// A triangle with per-vertex colour, normal AND texture coordinate — for textured
+    /// ground, where each corner samples a different point of the tile's ground texture.
+    /// </summary>
+    public void Triangle(Vector2 p0, Color c0, Vector3 n0, Vector2 uv0,
+                         Vector2 p1, Color c1, Vector3 n1, Vector2 uv1,
+                         Vector2 p2, Color c2, Vector3 n2, Vector2 uv2)
+    {
+        int b = Reserve(3, 3);
+        _verts[b] = new TerrainVertex(new Vector3(p0, 0f), c0, n0, uv0);
+        _verts[b + 1] = new TerrainVertex(new Vector3(p1, 0f), c1, n1, uv1);
+        _verts[b + 2] = new TerrainVertex(new Vector3(p2, 0f), c2, n2, uv2);
+        _indices[_indexCount++] = (ushort)b;
+        _indices[_indexCount++] = (ushort)(b + 1);
+        _indices[_indexCount++] = (ushort)(b + 2);
+        Grow(p0); Grow(p1); Grow(p2);
+    }
+
+    /// <summary>
     /// A textured sprite quad. <paramref name="origin"/> is the fraction of the
     /// quad (0..1) that sits at <paramref name="pos"/> — (0.5, 1) anchors the
     /// bottom-centre, the natural choice for plants standing on the ground.
