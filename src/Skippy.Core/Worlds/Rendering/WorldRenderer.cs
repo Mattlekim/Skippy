@@ -432,6 +432,12 @@ public sealed class WorldRenderer : IDisposable
         // Vegetation goes after all terrain, sorted so lower-on-screen plants draw
         // over the ones behind them.
         _veg.Sort(static (p, q) => p.Pos.Y.CompareTo(q.Pos.Y));
+
+        // Every plant's shadow first, as one layer on the ground, then the plants on
+        // top: that way a shadow only ever darkens the terrain, never the trunk of a
+        // tree standing in front of it.
+        foreach (VegItem item in _veg)
+            AppendShadow(item);
         foreach (VegItem item in _veg)
             AppendVegetation(item);
 
@@ -556,10 +562,13 @@ public sealed class WorldRenderer : IDisposable
         float elevShade = 0.82f + 0.30f * (level / (float)WorldConstants.MaxLevel);
 
         // Slope lighting from the north-west: ground that rises toward the top of the
-        // screen catches light. Central differences across the neighbouring vertices.
+        // screen catches light; a face falling away from it drops into shadow. Central
+        // differences across the neighbouring vertices. The response is turned up and
+        // its floor pulled down from the old ±0.2 so a mountain's shaded flanks read as
+        // genuinely in shadow — gentle ground barely slopes, so only steep faces feel it.
         float slope = 0.5f * (LevelAt(world, vx - 1, vy - 1) - LevelAt(world, vx + 1, vy + 1))
                     + 0.2f * (LevelAt(world, vx + 1, vy - 1) - LevelAt(world, vx - 1, vy + 1));
-        float slopeShade = Math.Clamp(1f + 0.05f * slope, 0.8f, 1.2f);
+        float slopeShade = Math.Clamp(1f + 0.07f * slope, 0.60f, 1.28f);
 
         float jitter = 0.96f + 0.08f * Hash01(vx, vy);
 
@@ -777,6 +786,43 @@ public sealed class WorldRenderer : IDisposable
             case Biome.Rock: if (rng.Next() > 0.6f) Add(Vegetation.Rock, rng.Next() > 0.6f ? 2 : 1); break;
         }
     }
+
+    /// <summary>How dark a plant's ground shadow is, premultiplied over the terrain.</summary>
+    private static readonly Color ShadowTint = new Color(6, 10, 8) * 0.30f;
+
+    /// <summary>
+    /// A plant's shadow, pooled on the ground at its foot. It is a single dark disc
+    /// squashed flat to lie in the ground plane and nudged to the south-east, away
+    /// from the north-west light the terrain is already shaded by, so every shadow on
+    /// the map falls the same way. Its size tracks the plant, so a tall tree throws a
+    /// broad pool and a shrub only a small one; grass is too slight to shadow.
+    /// </summary>
+    private void AppendShadow(in VegItem item)
+    {
+        float radius = ShadowRadius(item);
+        if (radius <= 0f)
+            return;
+
+        // Squashed to the ground plane and offset south-east (down-screen) from the
+        // foot, so the pool reads as lying on the floor rather than standing up.
+        Vector2 center = item.Pos + new Vector2(radius * 0.32f, radius * 0.16f);
+        var size = new Vector2(radius * 2f, radius * 2f * ShadowSquash);
+        _builder.Sprite(center, size, Center, _atlas.Disc, ShadowTint);
+    }
+
+    /// <summary>How flat a shadow lies: its height as a fraction of its width.</summary>
+    private const float ShadowSquash = 0.5f;
+
+    /// <summary>The ground radius (iso pixels) of a plant's shadow, or 0 for none.</summary>
+    private static float ShadowRadius(in VegItem item) => item.Veg switch
+    {
+        Vegetation.BroadleafTree or Vegetation.PalmTree or Vegetation.PineTree
+            => TreeHeight * 0.30f * item.Scale,
+        Vegetation.Bush => BushHeight * 0.42f * item.Scale,
+        Vegetation.Cactus => 4.5f * item.Scale,
+        Vegetation.Rock => 6f * item.Scale,
+        _ => 0f, // grass tufts are too slight to cast one
+    };
 
     /// <summary>
     /// Emits one plant as atlas-textured quads. Sizes are in iso pixels, scaled by

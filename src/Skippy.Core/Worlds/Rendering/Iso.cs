@@ -4,8 +4,8 @@ using Microsoft.Xna.Framework;
 namespace Skippy.Core.Worlds.Rendering;
 
 /// <summary>
-/// Isometric projection maths. Tiles are drawn as 2:1 diamonds; elevation lifts
-/// a tile straight up the screen by <see cref="HeightStep"/> pixels per level.
+/// Isometric projection maths. Tiles are drawn as diamonds (see <see cref="TileAspect"/>);
+/// elevation lifts a tile straight up the screen by <see cref="HeightStep"/> pixels per level.
 ///
 /// <see cref="TileWidth"/> is the single knob the whole world is drawn from, and
 /// it can be changed while the game runs (see the controls in docs/WORLD.md) so a
@@ -21,7 +21,23 @@ public static class Iso
 {
     /// <summary>The tile size the elevation step and scatter densities were authored against.</summary>
     public const int BaseTileWidth = 64;
-    private const float BaseHeightStep = 19f;
+
+    /// <summary>
+    /// Screen pixels one elevation level lifts a tile by, per <see cref="BaseTileWidth"/>.
+    /// This and <see cref="TileAspect"/> together set the camera's apparent pitch: a
+    /// tall step over a foreshortened ground plane is a low, tilted-back view in which
+    /// hills and mountains stand up off the map, rather than a near-top-down one that
+    /// flattens them. Turned up from the old 19 so a mountain reads as a mountain.
+    /// </summary>
+    private const float BaseHeightStep = 30f;
+
+    /// <summary>
+    /// The ground diamond's height as a fraction of its width. 0.5 is a textbook 2:1
+    /// isometric (~27° pitch); dropping it foreshortens the ground the way tilting the
+    /// camera back toward the horizon would, which is what makes vertical relief — the
+    /// mountains — read as taller against it.
+    /// </summary>
+    private const float TileAspect = 0.44f;
 
     public const int MinTileWidth = 16;
     public const int MaxTileWidth = 512;
@@ -45,8 +61,8 @@ public static class Iso
         }
     }
 
-    /// <summary>Height of a tile diamond. Tiles are 2:1, so this follows the width.</summary>
-    public static int TileHeight => _tileWidth / 2;
+    /// <summary>Height of a tile diamond. Follows the width through <see cref="TileAspect"/>.</summary>
+    public static int TileHeight => (int)MathF.Round(_tileWidth * TileAspect);
 
     /// <summary>Screen pixels one elevation level lifts a tile by.</summary>
     public static float HeightStep => _tileWidth * (BaseHeightStep / BaseTileWidth);
