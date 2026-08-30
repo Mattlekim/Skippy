@@ -505,12 +505,20 @@ public sealed class WorldRenderer : IDisposable
         return water >= land && water > 0;
     }
 
+    /// <summary>Level step to a neighbour at which ground starts to bare to rock, and where it is bare.</summary>
+    private const float CliffStart = 1.5f;
+    private const float CliffFull = 4f;
+
+    /// <summary>The colour of exposed cliff rock. Cool grey with a little brown in it.</summary>
+    private static readonly Color CliffRock = new(112, 104, 94);
+
     /// <summary>
     /// The final, fully shaded colour of one mesh vertex: the average biome colour of
-    /// the (up to four) tiles meeting there, lit by that vertex's own elevation and
-    /// the slope of the terrain around it, with a little per-vertex noise so flat
-    /// areas don't read as a single solid fill. Depends only on the vertex, never on
-    /// which tile is asking — that is what keeps the mesh seamless.
+    /// the (up to four) tiles meeting there, bared to rock where the ground is steep
+    /// (a cliff), then lit by that vertex's own elevation and the slope of the terrain
+    /// around it, with a little per-vertex noise so flat areas don't read as a single
+    /// solid fill. Depends only on the vertex, never on which tile is asking — that is
+    /// what keeps the mesh seamless.
     /// </summary>
     private static Color VertexColor(World world, int vx, int vy, bool wet)
     {
@@ -529,8 +537,22 @@ public sealed class WorldRenderer : IDisposable
                 r += c.R; g += c.G; b += c.B; n++;
             }
         }
+        Color ground = new(r / n, g / n, b / n);
 
         int level = LevelAt(world, vx, vy);
+
+        // Cliffs: steep land shows bare rock instead of turf. Steepness is the biggest
+        // one-tile level step around the vertex; it bares off past CliffStart and is
+        // all rock by CliffFull. Water keeps its own surface.
+        if (!wet)
+        {
+            int steep = Math.Max(
+                Math.Max(Math.Abs(LevelAt(world, vx + 1, vy) - level), Math.Abs(LevelAt(world, vx - 1, vy) - level)),
+                Math.Max(Math.Abs(LevelAt(world, vx, vy + 1) - level), Math.Abs(LevelAt(world, vx, vy - 1) - level)));
+            float cliff = Smoothstep01((steep - CliffStart) / (CliffFull - CliffStart));
+            ground = Color.Lerp(ground, CliffRock, cliff);
+        }
+
         float elevShade = 0.82f + 0.30f * (level / (float)WorldConstants.MaxLevel);
 
         // Slope lighting from the north-west: ground that rises toward the top of the
@@ -541,7 +563,7 @@ public sealed class WorldRenderer : IDisposable
 
         float jitter = 0.96f + 0.08f * Hash01(vx, vy);
 
-        return Scale(new Color(r / n, g / n, b / n), elevShade * slopeShade * jitter);
+        return Scale(ground, elevShade * slopeShade * jitter);
     }
 
     /// <summary>
