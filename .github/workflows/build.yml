@@ -23,13 +23,10 @@ jobs:
         run: dotnet build src/Skippy.Desktop -c Release
 
       - name: Publish Web (browser preview)
+        # Compile-checks the browser build. The deployable output is produced by
+        # the deploy-web-preview job below (which uploads it to Pages), so we do
+        # not upload a separate artifact here — that only burns Actions storage.
         run: dotnet publish src/Skippy.Web -c Release -o web-dist
-
-      - name: Upload Web preview artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: skippy-web
-          path: web-dist/wwwroot
 
   android:
     runs-on: ubuntu-latest
@@ -47,7 +44,11 @@ jobs:
         run: dotnet tool restore
 
       - name: Build Android APK
-        run: dotnet build src/Skippy.Android -c Release -f net8.0-android
+        # global.json rolls forward to the latest major SDK (currently .NET 10),
+        # under which net8.0-android is flagged EOL (NETSDK1202) and errors the
+        # build. The target framework is still fully supported for building, so
+        # opt out of the end-of-life check.
+        run: dotnet build src/Skippy.Android -c Release -f net8.0-android -p:CheckEolTargetFramework=false
 
   # Optional: publish the browser preview to GitHub Pages on pushes to main.
   # Enable Pages in the repo settings (Source: GitHub Actions) to use this.
