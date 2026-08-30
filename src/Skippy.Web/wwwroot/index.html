@@ -11,19 +11,60 @@
 </head>
 
 <body>
+    <!-- Blazor renders Pages/Index.razor here, which supplies #canvasHolder + #theCanvas. -->
     <div id="app">
         <div id="loading">Loading Skippy…</div>
     </div>
 
-    <!--
-        KNI renders the game into this canvas. Keep the id in sync with the KNI
-        Blazor sample's expected canvas id for the version you install.
-    -->
-    <canvas id="theCanvas" tabindex="0"></canvas>
-
     <div id="blazor-error-ui">
         An unhandled error has occurred. <a href="" class="reload">Reload</a>
     </div>
+
+    <!--
+        KNI's browser backend is plain-JS interop: these globals (nkJSObject,
+        nkCanvas, …) must exist before the WASM runtime calls them, so they load
+        BEFORE blazor.webassembly.js. JSObject must come first — the rest depend
+        on it. The version suffix tracks the nkast.Wasm.* packages pulled in by
+        this KNI release; if you upgrade KNI and the console reports a missing
+        global, refresh these paths to the new _content/ filenames (and note that
+        newer KNI moves JSObject to _content/nkast.Wasm.JSInterop/).
+    -->
+    <script src="_content/nkast.Wasm.Dom/js/JSObject.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Window.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Document.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Navigator.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Gamepad.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Dom/js/Media.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/Canvas.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/CanvasGLContext.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Canvas/js/Canvas2dContext.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.Audio/js/Audio.8.0.2.js"></script>
+    <script src="_content/nkast.Wasm.XHR/js/XHR.8.0.2.js"></script>
+
+    <!--
+        The KNI frame loop. Pages/Index.razor.cs calls initRenderJS(this) once the
+        page has rendered; from then on requestAnimationFrame pumps TickDotNet()
+        every frame, and the game draws into #theCanvas (sized to #canvasHolder).
+    -->
+    <script>
+        function tickJS() {
+            window.theInstance.invokeMethod('TickDotNet');
+            window.requestAnimationFrame(tickJS);
+        }
+        window.initRenderJS = (instance) => {
+            window.theInstance = instance;
+            var canvas = document.getElementById('theCanvas');
+            var holder = document.getElementById('canvasHolder');
+            canvas.width = holder.clientWidth;
+            canvas.height = holder.clientHeight;
+            canvas.addEventListener('contextmenu', e => e.preventDefault());
+            window.requestAnimationFrame(tickJS);
+        };
+        // Don't let arrow keys / space scroll the page out from under the game.
+        window.addEventListener('keydown', e => {
+            if ([32, 37, 38, 39, 40].indexOf(e.keyCode) > -1) e.preventDefault();
+        });
+    </script>
 
     <script src="_framework/blazor.webassembly.js" autostart="true"></script>
 </body>

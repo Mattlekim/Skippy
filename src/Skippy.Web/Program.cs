@@ -1,27 +1,30 @@
+using System;
+using System.Net.Http;
 using System.Threading.Tasks;
+using Microsoft.AspNetCore.Components.Web;
 using Microsoft.AspNetCore.Components.WebAssembly.Hosting;
-using Skippy.Core;
+using Microsoft.Extensions.DependencyInjection;
 
-// ============================================================================
+namespace Skippy.Web;
+
 // Browser entry point (Blazor WebAssembly + KNI).
 //
-// Blazor boots the WASM runtime, then we start the shared SkippyGame. Under
-// KNI, Game.Run() is non-blocking in the browser — it drives the loop off
-// requestAnimationFrame — so we start the game and then run the Blazor host.
-//
-// NOTE: KNI's Blazor bootstrap has evolved across versions. If the exact
-// start-up handshake differs in the KNI version you install, follow the current
-// "BlazorGL" sample in the KNI repo (https://github.com/kniEngine/kni). The
-// pieces that matter and are already wired here: the <canvas> in
-// wwwroot/index.html and starting SkippyGame after the host is built.
-// ============================================================================
-
-var builder = WebAssemblyHostBuilder.CreateDefault(args);
-builder.RootComponents.Add<Skippy.Web.App>("#app");
-
-var host = builder.Build();
-
-var game = new SkippyGame();
-game.Run(); // non-blocking under KNI/Blazor
-
-await host.RunAsync();
+// Program.cs is intentionally vanilla Blazor — it does NOT start the game.
+// KNI drives the game loop from JavaScript: index.html's requestAnimationFrame
+// calls TickDotNet() on the Pages/Index component (see Index.razor.cs), which
+// creates the shared SkippyGame and ticks it once per frame. This matches the
+// official KNI "kni-blazor-gl" template.
+internal static class Program
+{
+    private static async Task Main(string[] args)
+    {
+        var builder = WebAssemblyHostBuilder.CreateDefault(args);
+        builder.RootComponents.Add<App>("#app");
+        builder.RootComponents.Add<HeadOutlet>("head::after");
+        builder.Services.AddScoped(sp => new HttpClient
+        {
+            BaseAddress = new Uri(builder.HostEnvironment.BaseAddress),
+        });
+        await builder.Build().RunAsync();
+    }
+}
