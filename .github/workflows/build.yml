@@ -37,6 +37,13 @@ jobs:
         with:
           dotnet-version: "8.0.x"
 
+      # The repo global.json rolls forward to the latest major SDK (.NET 10),
+      # under which net8.0-android is rejected as an out-of-support workload
+      # (NETSDK1202). Pin this job to the .NET 8 SDK just for CI — this only
+      # rewrites the checked-out copy, never the committed global.json.
+      - name: Pin .NET 8 SDK for the Android build
+        run: echo '{ "sdk": { "version": "8.0.100", "rollForward": "latestFeature" } }' > global.json
+
       - name: Install Android workload
         run: dotnet workload install android
 
@@ -44,11 +51,7 @@ jobs:
         run: dotnet tool restore
 
       - name: Build Android APK
-        # global.json rolls forward to the latest major SDK (currently .NET 10),
-        # under which the net8.0-android workload is flagged out-of-support and
-        # errors the build (NETSDK1202) during restore. It still builds fine, so
-        # opt out of both the EOL-workload and EOL-framework checks.
-        run: dotnet build src/Skippy.Android -c Release -f net8.0-android -p:CheckEolWorkloads=false -p:CheckEolTargetFramework=false
+        run: dotnet build src/Skippy.Android -c Release -f net8.0-android
 
   # Publish the browser build to the gh-pages branch on pushes to main.
   # This deploys by pushing a branch (not an Actions artifact), so it uses no
