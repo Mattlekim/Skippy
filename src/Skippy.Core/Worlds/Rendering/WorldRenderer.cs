@@ -46,6 +46,24 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>World-space surface normal at each of those corners, for the sun to light.</summary>
     private readonly Vector3[] _cornerNormals = new Vector3[(Chunk.Size + 1) * (Chunk.Size + 1)];
 
+    /// <summary>
+    /// How many sub-cells each land tile is split into per side. The terrain surface is
+    /// otherwise flat between one integer corner and the next, so its slope snaps at
+    /// every vertex and reads as a crease or a point. Splitting the tile and lifting
+    /// each interior sub-vertex to a smoothly interpolated height rounds those slope
+    /// changes off. 1 would be the old single quad.
+    /// </summary>
+    private const int Subdiv = 3;
+
+    /// <summary>The chunk's level field plus a two-tile margin, so the smooth interpolation's 4×4 stencil never leaves it.</summary>
+    private const int FieldStride = Chunk.Size + 4;
+    private readonly float[] _levelField = new float[FieldStride * FieldStride];
+
+    /// <summary>Scratch for one land tile's (Subdiv+1)² sub-vertices while it is being emitted.</summary>
+    private readonly Vector2[] _subPos = new Vector2[(Subdiv + 1) * (Subdiv + 1)];
+    private readonly Color[] _subCol = new Color[(Subdiv + 1) * (Subdiv + 1)];
+    private readonly Vector3[] _subNrm = new Vector3[(Subdiv + 1) * (Subdiv + 1)];
+
     /// <summary>Which side of the waterline each of those corners came down on.</summary>
     private readonly bool[] _cornerWet = new bool[(Chunk.Size + 1) * (Chunk.Size + 1)];
 
@@ -410,6 +428,13 @@ public sealed class WorldRenderer : IDisposable
         int ox = chunk.OriginX, oy = chunk.OriginY;
         const int stride = Chunk.Size + 1;
 
+        // Cache the chunk's level field (plus a two-tile margin) once, so the smooth
+        // subdivision below reads heights out of a flat array instead of doing a tile
+        // lookup for every one of its samples.
+        for (int fy = 0; fy < FieldStride; fy++)
+            for (int fx = 0; fx < FieldStride; fx++)
+                _levelField[fy * FieldStride + fx] = LevelAt(world, ox + fx - 2, oy + fy - 2);
+
         // Every vertex of the chunk gets ONE colour, computed from data that belongs
         // to the vertex itself (its own elevation, the slope around it, the biomes
         // meeting at it). All tiles sharing the vertex use the identical colour, so
@@ -456,21 +481,32 @@ public sealed class WorldRenderer : IDisposable
                 Color cC = CornerColor(world, (ly + 1) * stride + lx + 1, tx + 1, ty + 1, wet);
                 Color cD = CornerColor(world, (ly + 1) * stride + lx, tx, ty + 1, wet);
 
-                Vector3 nA = _cornerNormals[ly * stride + lx];
-                Vector3 nB = _cornerNormals[ly * stride + lx + 1];
-                Vector3 nC = _cornerNormals[(ly + 1) * stride + lx + 1];
-                Vector3 nD = _cornerNormals[(ly + 1) * stride + lx];
+                // Land in the game view is subdivided and smoothed so its slopes flow
+                // between corners instead of creasing at them. Flat water and the data
+                // views keep the cheap single quad — water is flat anyway, and a data
+                // view wants to read the raw per-vertex value, not a smoothed one.
+                if (biomeView && !tile.IsWater)
+                {
+                    EmitSmoothTile(lx, ly, tx, ty, cA, cB, cC, cD, terrainUv);
+                }
+                else
+                {
+                    Vector3 nA = _cornerNormals[ly * stride + lx];
+                    Vector3 nB = _cornerNormals[ly * stride + lx + 1];
+                    Vector3 nC = _cornerNormals[(ly + 1) * stride + lx + 1];
+                    Vector3 nD = _cornerNormals[(ly + 1) * stride + lx];
 
-                // Fan four triangles around a centre vertex rather than splitting on
-                // one diagonal, which would bias interpolation and show as a crease.
-                Vector2 m = (a + b + c + d) * 0.25f;
-                Color cM = Average(cA, cB, cC, cD);
-                Vector3 nM = Vector3.Normalize(nA + nB + nC + nD);
+                    // Fan four triangles around a centre vertex rather than splitting on
+                    // one diagonal, which would bias interpolation and show as a crease.
+                    Vector2 m = (a + b + c + d) * 0.25f;
+                    Color cM = Average(cA, cB, cC, cD);
+                    Vector3 nM = Vector3.Normalize(nA + nB + nC + nD);
 
-                _builder.Triangle(a, cA, nA, b, cB, nB, m, cM, nM, terrainUv);
-                _builder.Triangle(b, cB, nB, c, cC, nC, m, cM, nM, terrainUv);
-                _builder.Triangle(c, cC, nC, d, cD, nD, m, cM, nM, terrainUv);
-                _builder.Triangle(d, cD, nD, a, cA, nA, m, cM, nM, terrainUv);
+                    _builder.Triangle(a, cA, nA, b, cB, nB, m, cM, nM, terrainUv);
+                    _builder.Triangle(b, cB, nB, c, cC, nC, m, cM, nM, terrainUv);
+                    _builder.Triangle(c, cC, nC, d, cD, nD, m, cM, nM, terrainUv);
+                    _builder.Triangle(d, cD, nD, a, cA, nA, m, cM, nM, terrainUv);
+                }
 
                 // The data views are about the ground itself; plants and surf would
                 // only hide it.
@@ -501,6 +537,88 @@ public sealed class WorldRenderer : IDisposable
 
         return _builder.Upload(neighborMask);
     }
+
+    /// <summary>
+    /// Emits one land tile as a <see cref="Subdiv"/>×<see cref="Subdiv"/> grid whose
+    /// interior heights and normals come from a smooth (Catmull-Rom) interpolation of
+    /// the level field. The interpolation passes exactly through the integer corner
+    /// heights, so the tile still meets its neighbours — and the flat water beside it —
+    /// seamlessly; only the ground in between is rounded off. Colour is bilinear across
+    /// the tile's four (already shore-correct) corner colours.
+    /// </summary>
+    private void EmitSmoothTile(int lx, int ly, int tx, int ty, Color cA, Color cB, Color cC, Color cD, Vector2 uv)
+    {
+        const int n = Subdiv, span = Subdiv + 1;
+        for (int i = 0; i <= n; i++)
+        {
+            float v = i / (float)n;
+            for (int j = 0; j <= n; j++)
+            {
+                float u = j / (float)n;
+                float fx = lx + u, fy = ly + v;
+                float level = SmoothLevel(fx, fy);
+                int k = i * span + j;
+                _subPos[k] = Iso.TileToIso(tx + u, ty + v, level);
+                _subCol[k] = BilerpColor(cA, cB, cC, cD, u, v);
+                _subNrm[k] = SmoothNormal(fx, fy);
+            }
+        }
+
+        for (int i = 0; i < n; i++)
+            for (int j = 0; j < n; j++)
+            {
+                int p00 = i * span + j, p01 = p00 + 1, p10 = p00 + span, p11 = p10 + 1;
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00],
+                                  _subPos[p01], _subCol[p01], _subNrm[p01],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11], uv);
+                _builder.Triangle(_subPos[p00], _subCol[p00], _subNrm[p00],
+                                  _subPos[p11], _subCol[p11], _subNrm[p11],
+                                  _subPos[p10], _subCol[p10], _subNrm[p10], uv);
+            }
+    }
+
+    /// <summary>A smoothly interpolated elevation level at a chunk-local fractional position (bicubic Catmull-Rom).</summary>
+    private float SmoothLevel(float fx, float fy)
+    {
+        int ix = (int)MathF.Floor(fx), iy = (int)MathF.Floor(fy);
+        float u = fx - ix, v = fy - iy;
+        float r0 = CatmullRom(Lf(ix - 1, iy - 1), Lf(ix, iy - 1), Lf(ix + 1, iy - 1), Lf(ix + 2, iy - 1), u);
+        float r1 = CatmullRom(Lf(ix - 1, iy), Lf(ix, iy), Lf(ix + 1, iy), Lf(ix + 2, iy), u);
+        float r2 = CatmullRom(Lf(ix - 1, iy + 1), Lf(ix, iy + 1), Lf(ix + 1, iy + 1), Lf(ix + 2, iy + 1), u);
+        float r3 = CatmullRom(Lf(ix - 1, iy + 2), Lf(ix, iy + 2), Lf(ix + 1, iy + 2), Lf(ix + 2, iy + 2), u);
+        return CatmullRom(r0, r1, r2, r3, v);
+    }
+
+    /// <summary>The surface normal of the smoothed height field, from a central difference of <see cref="SmoothLevel"/>.</summary>
+    private Vector3 SmoothNormal(float fx, float fy)
+    {
+        const float e = 0.5f;
+        float slopeX = SmoothLevel(fx + e, fy) - SmoothLevel(fx - e, fy);
+        float slopeY = SmoothLevel(fx, fy + e) - SmoothLevel(fx, fy - e);
+        return Vector3.Normalize(new Vector3(-slopeX * 2f * NormalRelief, 2f, -slopeY * 2f * NormalRelief));
+    }
+
+    /// <summary>Reads the cached level field by chunk-local tile coordinate, clamped to the margin.</summary>
+    private float Lf(int localX, int localY)
+    {
+        int fx = Math.Clamp(localX + 2, 0, FieldStride - 1);
+        int fy = Math.Clamp(localY + 2, 0, FieldStride - 1);
+        return _levelField[fy * FieldStride + fx];
+    }
+
+    /// <summary>Catmull-Rom spline through <paramref name="p1"/>..<paramref name="p2"/>; passes through the control points.</summary>
+    private static float CatmullRom(float p0, float p1, float p2, float p3, float t)
+    {
+        float t2 = t * t, t3 = t2 * t;
+        return 0.5f * (2f * p1
+                       + (-p0 + p2) * t
+                       + (2f * p0 - 5f * p1 + 4f * p2 - p3) * t2
+                       + (-p0 + 3f * p1 - 3f * p2 + p3) * t3);
+    }
+
+    /// <summary>Bilinear blend of a tile's four corner colours: A top-left, B top-right, C bottom-right, D bottom-left.</summary>
+    private static Color BilerpColor(Color a, Color b, Color c, Color d, float u, float v)
+        => Color.Lerp(Color.Lerp(a, b, u), Color.Lerp(d, c, u), v);
 
     /// <summary>
     /// The debug tile grid: one line along every tile edge, following the same
