@@ -23,6 +23,9 @@ public class World
     public int Seed { get; }
     public Camera Camera { get; } = new();
 
+    /// <summary>The sun and sky. Advances every frame so the light climbs and sets on its own.</summary>
+    public SkyLight Sky { get; } = new();
+
     /// <summary>Chunk radius kept loaded around the camera. 2 → a 5×5 chunk window.</summary>
     public int LoadRadius { get; set; } = 3;
 
@@ -101,6 +104,10 @@ public class World
     public virtual void Update(GameTime gameTime, InputState input)
     {
         float dt = (float)gameTime.ElapsedGameTime.TotalSeconds;
+
+        // The sun runs on its own clock, so the world is never done changing even
+        // when the camera is still.
+        Sky.Advance(dt);
 
         // Keyboard pan (screen-space direction → tile delta).
         if (input.MoveDirection != Vector2.Zero)

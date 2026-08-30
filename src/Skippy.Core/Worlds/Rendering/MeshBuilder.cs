@@ -20,8 +20,11 @@ public sealed class MeshBuilder
 {
     private const int MaxVertsPerSegment = 65532; // multiple of 4, under ushort.MaxValue
 
+    /// <summary>Sprites and lines are flat, screen-facing billboards; they light as if facing straight up.</summary>
+    private static readonly Vector3 Up = new(0f, 1f, 0f);
+
     private readonly GraphicsDevice _gd;
-    private VertexPositionColorTexture[] _verts = new VertexPositionColorTexture[16384];
+    private TerrainVertex[] _verts = new TerrainVertex[16384];
     private ushort[] _indices = new ushort[24576];
     private int _vertCount, _indexCount;
 
@@ -39,13 +42,18 @@ public sealed class MeshBuilder
         _max = new Vector2(float.MinValue);
     }
 
-    /// <summary>A triangle with per-vertex colour. All three vertices sample <paramref name="uv"/>.</summary>
-    public void Triangle(Vector2 p0, Color c0, Vector2 p1, Color c1, Vector2 p2, Color c2, Vector2 uv)
+    /// <summary>
+    /// A triangle with per-vertex colour and per-vertex world-space normal (so a
+    /// sloped face lights by its own tilt). All three vertices sample <paramref name="uv"/>.
+    /// </summary>
+    public void Triangle(Vector2 p0, Color c0, Vector3 n0,
+                         Vector2 p1, Color c1, Vector3 n1,
+                         Vector2 p2, Color c2, Vector3 n2, Vector2 uv)
     {
         int b = Reserve(3, 3);
-        _verts[b] = new VertexPositionColorTexture(new Vector3(p0, 0f), c0, uv);
-        _verts[b + 1] = new VertexPositionColorTexture(new Vector3(p1, 0f), c1, uv);
-        _verts[b + 2] = new VertexPositionColorTexture(new Vector3(p2, 0f), c2, uv);
+        _verts[b] = new TerrainVertex(new Vector3(p0, 0f), c0, n0, uv);
+        _verts[b + 1] = new TerrainVertex(new Vector3(p1, 0f), c1, n1, uv);
+        _verts[b + 2] = new TerrainVertex(new Vector3(p2, 0f), c2, n2, uv);
         _indices[_indexCount++] = (ushort)b;
         _indices[_indexCount++] = (ushort)(b + 1);
         _indices[_indexCount++] = (ushort)(b + 2);
@@ -62,10 +70,10 @@ public sealed class MeshBuilder
         Vector2 tl = pos - size * origin;
         Vector2 br = tl + size;
         int b = Reserve(4, 6);
-        _verts[b] = new VertexPositionColorTexture(new Vector3(tl.X, tl.Y, 0f), color, new Vector2(region.U0, region.V0));
-        _verts[b + 1] = new VertexPositionColorTexture(new Vector3(br.X, tl.Y, 0f), color, new Vector2(region.U1, region.V0));
-        _verts[b + 2] = new VertexPositionColorTexture(new Vector3(br.X, br.Y, 0f), color, new Vector2(region.U1, region.V1));
-        _verts[b + 3] = new VertexPositionColorTexture(new Vector3(tl.X, br.Y, 0f), color, new Vector2(region.U0, region.V1));
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, 0f), color, Up, new Vector2(region.U0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, 0f), color, Up, new Vector2(region.U1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, 0f), color, Up, new Vector2(region.U1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, 0f), color, Up, new Vector2(region.U0, region.V1));
         _indices[_indexCount++] = (ushort)b;
         _indices[_indexCount++] = (ushort)(b + 1);
         _indices[_indexCount++] = (ushort)(b + 2);
@@ -87,10 +95,10 @@ public sealed class MeshBuilder
 
         Vector2 n = new Vector2(-d.Y, d.X) * (width * 0.5f / len);
         int i = Reserve(4, 6);
-        _verts[i] = new VertexPositionColorTexture(new Vector3(a + n, 0f), color, uv);
-        _verts[i + 1] = new VertexPositionColorTexture(new Vector3(b + n, 0f), color, uv);
-        _verts[i + 2] = new VertexPositionColorTexture(new Vector3(b - n, 0f), color, uv);
-        _verts[i + 3] = new VertexPositionColorTexture(new Vector3(a - n, 0f), color, uv);
+        _verts[i] = new TerrainVertex(new Vector3(a + n, 0f), color, Up, uv);
+        _verts[i + 1] = new TerrainVertex(new Vector3(b + n, 0f), color, Up, uv);
+        _verts[i + 2] = new TerrainVertex(new Vector3(b - n, 0f), color, Up, uv);
+        _verts[i + 3] = new TerrainVertex(new Vector3(a - n, 0f), color, Up, uv);
         _indices[_indexCount++] = (ushort)i;
         _indices[_indexCount++] = (ushort)(i + 1);
         _indices[_indexCount++] = (ushort)(i + 2);
@@ -131,7 +139,7 @@ public sealed class MeshBuilder
     {
         if (_vertCount == 0) return;
 
-        var vb = new VertexBuffer(_gd, VertexPositionColorTexture.VertexDeclaration, _vertCount, BufferUsage.WriteOnly);
+        var vb = new VertexBuffer(_gd, TerrainVertex.VertexDeclaration, _vertCount, BufferUsage.WriteOnly);
         vb.SetData(_verts, 0, _vertCount);
         var ib = new IndexBuffer(_gd, IndexElementSize.SixteenBits, _indexCount, BufferUsage.WriteOnly);
         ib.SetData(_indices, 0, _indexCount);

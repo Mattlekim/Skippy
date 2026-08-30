@@ -76,7 +76,7 @@ public class SkippyGame : Game
 
     protected override void Draw(GameTime gameTime)
     {
-        GraphicsDevice.Clear(new Color(18, 22, 32));
+        GraphicsDevice.Clear(_world.Sky.SkyColor);
         _world.Draw(_spriteBatch, GraphicsDevice);
         DrawHud();
         base.Draw(gameTime);
