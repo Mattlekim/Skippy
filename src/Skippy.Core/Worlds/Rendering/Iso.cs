@@ -115,6 +115,21 @@ public static class Iso
         (tileX - tileY) * (TileWidth / 2f),
         (tileX + tileY) * (TileHeight / 2f) - ElevationLift(level));
 
+    /// <summary>
+    /// Screen offset, in iso pixels, for a small object-local displacement measured from a
+    /// point standing on the ground: <paramref name="east"/> and <paramref name="south"/>
+    /// run along the two ground (tile) axes and <paramref name="up"/> straight up the screen.
+    ///
+    /// It is the tile projection collapsed to a unit step, so geometry built in this frame
+    /// (a scattered rock, say) lies on the isometric ground and foreshortens with it — but
+    /// keeps an absolute pixel size rather than growing with the tile the way tile-space
+    /// geometry would, which is what everything scattered on the ground wants. The frame
+    /// matches the world lighting frame (x = east, y = up, z = south), so a facet normal
+    /// worked out in these same coordinates can be handed straight to the sun.
+    /// </summary>
+    public static Vector2 ObjectOffset(float east, float up, float south)
+        => new(east - south, (east + south) * TileAspect - up);
+
     /// <summary>Iso-space pixel → world tile, ignoring elevation (used for picking / culling).</summary>
     public static Vector2 IsoToTile(float isoX, float isoY)
     {

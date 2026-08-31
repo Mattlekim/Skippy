@@ -1052,6 +1052,34 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>The white ground draws the texture at its own colour; only the sun shades it.</summary>
     private static readonly Color TerrainWhite = Color.White;
 
+    /// <summary>How broad the ground's large-scale mottling is: one cycle every ~1/freq tiles.</summary>
+    private const float GroundMacroFreq = 0.055f;
+
+    /// <summary>The most the macro mottling darkens the ground (a vertex colour can only darken).</summary>
+    private const float GroundMacroDepth = 0.20f;
+
+    /// <summary>
+    /// Broad, many-tiles-wide brightness variation folded into the ground so a simple
+    /// repeating tile texture stops reading as a grid. A low-frequency fractal (a few octaves
+    /// of value noise) darkens the ground in soft, wandering patches far larger than a tile —
+    /// like the natural mottling of real land — so no two stretches of the same texture look
+    /// quite alike. It only ever darkens, because a vertex colour cannot brighten a texture.
+    /// </summary>
+    private static float GroundMacro(float worldX, float worldY)
+    {
+        float x = worldX * GroundMacroFreq, y = worldY * GroundMacroFreq;
+        float n = 0.6f * ValueNoise(x, y) + 0.4f * ValueNoise(x * 2.3f + 11.5f, y * 2.3f + 4.7f);
+        return 1f - GroundMacroDepth * n;
+    }
+
+    /// <summary>
+    /// Scales a colour's RGB while leaving its alpha untouched. The ground colours are
+    /// premultiplied (rgb ≤ a), so darkening only the RGB dims the shade without eating into
+    /// a layer's coverage — which is what the macro mottling wants, and what a plain colour
+    /// multiply (which would also scale the alpha, thinning shore cuts and blend edges) does not.
+    /// </summary>
+    private static Color ScaleRgb(Color c, float m) => new((byte)(c.R * m), (byte)(c.G * m), (byte)(c.B * m), c.A);
+
     /// <summary>
     /// Emits one land tile as a <see cref="Subdiv"/>×<see cref="Subdiv"/> grid whose
     /// interior heights and normals come from a smooth (Catmull-Rom) interpolation of
@@ -1076,7 +1104,8 @@ public sealed class WorldRenderer : IDisposable
                 int k = i * span + j;
                 _subPos[k] = Iso.TileToIso(tx + u, ty + v, level);
                 _subNrm[k] = SmoothNormal(fx, fy);
-                _subCol[k] = overlay ? BlendColor(wTL, wTR, wBR, wBL, u, v, tx, ty) : TerrainWhite;
+                _subCol[k] = ScaleRgb(overlay ? BlendColor(wTL, wTR, wBR, wBL, u, v, tx, ty) : TerrainWhite,
+                                      GroundMacro(tx + u, ty + v));
                 _subA[k] = 1f; // no shore cut here, and the snow drawn after reads this
             }
         }
@@ -1802,7 +1831,8 @@ public sealed class WorldRenderer : IDisposable
             {
                 int k = i * span + j;
                 float a = overlayIndex < 0 ? 1f : _subMem[k * MaxBlendOverlays + overlayIndex];
-                _subCol[k] = TerrainWhite * (shore ? a : a * _subA[k]);
+                float macro = GroundMacro(tx + j / (float)n, ty + i / (float)n);
+                _subCol[k] = ScaleRgb(TerrainWhite * (shore ? a : a * _subA[k]), macro);
             }
 
         FillGroundUv(tex, tx, ty, n);
@@ -2241,11 +2271,13 @@ public sealed class WorldRenderer : IDisposable
             case Biome.TemperateForest:
                 Add(Vegetation.BroadleafTree, 5 + Ri(dens * 6), deadChance: 0.07f);
                 Add(Vegetation.Bush, Ri(dens * 2));
+                Add(Vegetation.Rock, RockRateForest);
                 break;
             case Biome.Taiga:
                 Add(Vegetation.PineTree, 5 + Ri(dens * 6), deadChance: 0.10f);
                 // Undergrowth is sparse in the cold: only the odd frost-bitten shrub.
                 if (rng.Next() > 0.9f) Add(Vegetation.Bush, 1, deadChance: 0.5f);
+                Add(Vegetation.Rock, RockRateForest);
                 break;
             case Biome.Jungle:
                 Add(Vegetation.PalmTree, 6 + Ri(dens * 6), deadChance: 0.04f);
@@ -2257,6 +2289,7 @@ public sealed class WorldRenderer : IDisposable
                 // switch at dens 0.5 — half the grassland bare, half of it a forest.
                 Add(Vegetation.BroadleafTree, 0.05f + 0.7f * MathF.Max(0f, dens - 0.5f), deadChance: 0.09f);
                 if (dens > 0.35f && rng.Next() > 0.5f) Add(Vegetation.Bush, 1);
+                Add(Vegetation.Rock, RockRateGrassland);
                 break;
             case Biome.Savanna:
                 if (dens > 0.55f) Add(Vegetation.BroadleafTree, dens > 0.8f ? 2 : 1, deadChance: 0.18f);
@@ -2267,11 +2300,15 @@ public sealed class WorldRenderer : IDisposable
                 break;
             case Biome.Tundra:
                 // Nothing up here keeps a leaf: tundra scrub is bare twigs, always —
-                // and thin on the ground, only the rare hardy shrub in the frost.
+                // and thin on the ground, only the rare hardy shrub in the frost. What it
+                // does have is stone — frost-heaved rock breaking through the thin soil.
                 if (rng.Next() > 0.92f) Add(Vegetation.Bush, 1, deadChance: 1f);
+                Add(Vegetation.Rock, RockRateTundra);
                 break;
+            // Desert stays bare stone-wise: shifting sand carries no scattered rock.
             case Biome.Desert: if (dens > 0.7f) Add(Vegetation.Cactus, dens > 0.88f ? 2 : 1); break;
-            case Biome.Rock: if (rng.Next() > 0.6f) Add(Vegetation.Rock, rng.Next() > 0.6f ? 2 : 1); break;
+            // The mountains are made of the stuff: rock thickly over the bare peaks.
+            case Biome.Rock: Add(Vegetation.Rock, RockRateMountain); break;
         }
     }
 
@@ -2388,6 +2425,17 @@ public sealed class WorldRenderer : IDisposable
     /// <summary>The size jitter a scattered plant can roll, smallest to largest.</summary>
     private const float MinVegScale = 0.8f;
     private const float MaxVegScale = 1.3f;
+
+    /// <summary>
+    /// How many scattered rocks a base-sized tile grows, per biome — a rate, settled with a
+    /// coin toss below one whole rock so it holds at any tile size. The mountains are thick
+    /// with stone; grassland shows only the occasional weathered boulder; the desert none at
+    /// all (its sand carries nothing loose).
+    /// </summary>
+    private const float RockRateMountain = 2.5f;   // very high — the peaks are bare rock
+    private const float RockRateForest = 0.10f;    // low — the odd mossy stone among the trees
+    private const float RockRateTundra = 0.14f;    // low — frost-heaved rock through thin soil
+    private const float RockRateGrassland = 0.03f; // very low — a lone boulder in open country
 
     /// <summary>
     /// A shear that turns each shadow vertex's z (how far its plant's pool may lean) into
@@ -2855,13 +2903,72 @@ public sealed class WorldRenderer : IDisposable
         }
     }
 
+    /// <summary>
+    /// A rock, built as real low-poly geometry rather than a flat sprite: a ragged ring of
+    /// points on the ground drawn up to an off-centre summit, so it stands as a faceted
+    /// boulder that the sun catches face by face. Each rock rolls its own silhouette, summit
+    /// lean and facet count off its seed, and a size class scales the whole thing — most come
+    /// up as low cobbles, the odd one as a big craggy boulder — so a scatter of them reads as
+    /// a field of individual stones rather than one shape stamped over and over.
+    ///
+    /// The face shading is baked into the vertex colour (brightest where a facet faces the
+    /// sky, darker down the near-vertical sides) as well as carried in a real world-space
+    /// normal, so the stone keeps its form both in the lit painter path and in the flat-lit
+    /// depth path — the same reason the painted plants carry their shading in their art.
+    /// </summary>
     private void Rock(Vector2 at, float s, ref XorShift rng)
     {
-        Color stone = Vary(RockStone, ref rng, 0.10f);
-        float d = (7f + 3f * rng.Next()) * s;
-        Disc(at - new Vector2(0f, d * 0.25f), d, stone);
-        Disc(at + new Vector2(d * 0.3f, -d * 0.1f), d * 0.55f, Scale(stone, 0.88f));
-        Disc(at - new Vector2(d * 0.2f, d * 0.45f), d * 0.45f, Scale(stone, 1.15f));
+        Color stone = Vary(RockStone, ref rng, 0.08f);
+
+        int sides = rng.Range(5, 7);
+        // Most rocks are low cobbles; roughly one in seven is a big boulder.
+        float size = (rng.Next() > 0.86f ? 9f + 5f * rng.Next() : 4.5f + 3.5f * rng.Next()) * s;
+        float height = size * (0.7f + 0.5f * rng.Next());
+
+        // The summit, leaned off-centre so the rock is lopsided rather than a neat cone.
+        float leanAng = rng.Next() * MathF.PI * 2f;
+        float leanR = size * 0.30f * rng.Next();
+        var apex = new Vector3(MathF.Cos(leanAng) * leanR, height, MathF.Sin(leanAng) * leanR);
+
+        // The ragged base ring, sitting on the ground (up = 0).
+        Span<Vector3> ring = stackalloc Vector3[sides];
+        float a0 = rng.Next() * MathF.PI * 2f;
+        for (int i = 0; i < sides; i++)
+        {
+            float ang = a0 + i / (float)sides * MathF.PI * 2f;
+            float r = size * (0.72f + 0.5f * rng.Next());
+            ring[i] = new Vector3(MathF.Cos(ang) * r, 0f, MathF.Sin(ang) * r);
+        }
+
+        // One flat-shaded facet per side, its base edge drawn up to the summit.
+        for (int i = 0; i < sides; i++)
+            RockFace(at, stone, ring[i], ring[(i + 1) % sides], apex);
+    }
+
+    /// <summary>
+    /// One flat-shaded rock facet, from three points in the rock's own (east, up, south)
+    /// frame: its outward-and-up normal for the sun, and a top-light baked into the colour so
+    /// the facet still reads as stone where nothing is lighting it.
+    /// </summary>
+    private void RockFace(Vector2 at, Color stone, Vector3 p0, Vector3 p1, Vector3 p2)
+    {
+        // The local frame is already the world lighting frame (x = east, y = up, z = south),
+        // so the facet's own normal lights it directly. Rocks are only ever seen from above,
+        // so a face is flipped to point up rather than sorted for winding.
+        Vector3 nrm = Vector3.Cross(p1 - p0, p2 - p0);
+        if (nrm.LengthSquared() < 1e-6f)
+            return;
+        nrm.Normalize();
+        if (nrm.Y < 0f)
+            nrm = -nrm;
+
+        float shade = 0.68f + 0.32f * Math.Clamp(nrm.Y, 0f, 1f);
+        Color c = Scale(stone, shade);
+
+        Vector2 s0 = at + Iso.ObjectOffset(p0.X, p0.Y, p0.Z);
+        Vector2 s1 = at + Iso.ObjectOffset(p1.X, p1.Y, p1.Z);
+        Vector2 s2 = at + Iso.ObjectOffset(p2.X, p2.Y, p2.Z);
+        _builder.Triangle(s0, c, nrm, s1, c, nrm, s2, c, nrm, _atlas.White.CenterUv);
     }
 
     // ---- sprite helpers (all append to the current chunk mesh) --------------
