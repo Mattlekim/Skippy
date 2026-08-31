@@ -54,15 +54,20 @@ public sealed class MeshBuilder
     /// <summary>
     /// A triangle with per-vertex colour and per-vertex world-space normal (so a
     /// sloped face lights by its own tilt). All three vertices sample <paramref name="uv"/>.
+    ///
+    /// Like the billboards, it carries <see cref="DepthZ"/> in z — 0 for terrain (which leaves
+    /// it there), the caster's foot iso-Y for a scattered solid such as a rock, so the
+    /// depth-tested path resolves the whole thing at its foot rather than face by face.
     /// </summary>
     public void Triangle(Vector2 p0, Color c0, Vector3 n0,
                          Vector2 p1, Color c1, Vector3 n1,
                          Vector2 p2, Color c2, Vector3 n2, Vector2 uv)
     {
+        float z = DepthZ;
         int b = Reserve(3, 3);
-        _verts[b] = new TerrainVertex(new Vector3(p0, 0f), c0, n0, uv);
-        _verts[b + 1] = new TerrainVertex(new Vector3(p1, 0f), c1, n1, uv);
-        _verts[b + 2] = new TerrainVertex(new Vector3(p2, 0f), c2, n2, uv);
+        _verts[b] = new TerrainVertex(new Vector3(p0, z), c0, n0, uv);
+        _verts[b + 1] = new TerrainVertex(new Vector3(p1, z), c1, n1, uv);
+        _verts[b + 2] = new TerrainVertex(new Vector3(p2, z), c2, n2, uv);
         _indices[_indexCount++] = (ushort)b;
         _indices[_indexCount++] = (ushort)(b + 1);
         _indices[_indexCount++] = (ushort)(b + 2);

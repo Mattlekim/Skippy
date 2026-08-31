@@ -303,12 +303,57 @@ public sealed class TextureAtlas : IDisposable
     /// </summary>
     private static readonly float[] GroundWash = { 0f, 0f, 0f, 0f, 0f, 0.58f, 0f, 0f, 0f, 0f, 0f, 0f };
 
+    /// <summary>
+    /// How far each ground texture is flattened toward its own average colour as it is packed,
+    /// in the sheet's row-major order. This is what makes the tiles read as simple, calm ground
+    /// rather than busy speckle: pulling every pixel partway to the tile's mean drains the small
+    /// colour-to-colour variation while leaving just enough texture to see the surface. The two
+    /// water tiles (8, 9) are left alone — their ripple is the whole point of them — and the
+    /// bare rock the mountains wear (6) is flattened hardest, on its way to grey (below).
+    /// </summary>
+    private static readonly float[] GroundFlatten = { 0.5f, 0.5f, 0.45f, 0.5f, 0.45f, 0.5f, 0.62f, 0.5f, 0f, 0f, 0.5f, 0.5f };
+
+    /// <summary>The neutral stone grey the rock tile is pulled toward, so the mountains read as bare grey rock.</summary>
+    private static readonly Color RockGrey = new(124, 121, 118);
+
     /// <summary>Mixes a colour towards white by <paramref name="amount"/> (0 leaves it alone).</summary>
     private static Color Whiten(Color c, float amount)
         => amount <= 0f ? c : new Color(
             (int)(c.R + (255 - c.R) * amount),
             (int)(c.G + (255 - c.G) * amount),
             (int)(c.B + (255 - c.B) * amount));
+
+    /// <summary>Mixes two colours; <paramref name="t"/> = 0 is <paramref name="a"/>, 1 is <paramref name="b"/>.</summary>
+    private static Color Mix(Color a, Color b, float t) => new(
+        (int)(a.R + (b.R - a.R) * t),
+        (int)(a.G + (b.G - a.G) * t),
+        (int)(a.B + (b.B - a.B) * t));
+
+    /// <summary>
+    /// Drains a colour of its hue: partway to its own grey (its luminance) by
+    /// <paramref name="amount"/>, then a touch toward the neutral stone <see cref="RockGrey"/>,
+    /// so the rock tile comes out as grey stone whatever tint the source art carried.
+    /// </summary>
+    private static Color Greyify(Color c, float amount)
+    {
+        int lum = (int)(0.30f * c.R + 0.59f * c.G + 0.11f * c.B);
+        Color desat = Mix(c, new Color(lum, lum, lum), amount);
+        return Mix(desat, RockGrey, 0.3f);
+    }
+
+    /// <summary>The mean colour of a tile in the source sheet, used to flatten it toward one calm shade.</summary>
+    private static Color TileMean(Color[] src, int sw, int tileCol, int tileRow, int tw, int th)
+    {
+        long sr = 0, sg = 0, sb = 0;
+        for (int y = 0; y < th; y++)
+            for (int x = 0; x < tw; x++)
+            {
+                Color p = src[(tileRow * th + y) * sw + (tileCol * tw + x)];
+                sr += p.R; sg += p.G; sb += p.B;
+            }
+        int count = tw * th;
+        return new Color((int)(sr / count), (int)(sg / count), (int)(sb / count));
+    }
 
     private static List<Piece> LoadTerrainSheet(GraphicsDevice gd, string resource)
     {
@@ -325,8 +370,15 @@ public sealed class TextureAtlas : IDisposable
         {
             for (int c = 0; c < TerrainCols; c++)
             {
+                int idx = r * TerrainCols + c;
                 int pw = tw + 2 * TerrainPad, ph = th + 2 * TerrainPad;
-                float wash = GroundWash[r * TerrainCols + c];
+                float wash = GroundWash[idx];
+                float flatten = GroundFlatten[idx];
+                bool rock = idx == 6;
+
+                // The tile's own mean, to flatten each pixel toward — computed once up front.
+                Color mean = flatten > 0f ? TileMean(src, sw, c, r, tw, th) : default;
+
                 var outPx = new Color[pw * ph];
                 for (int y = 0; y < ph; y++)
                 {
@@ -334,7 +386,10 @@ public sealed class TextureAtlas : IDisposable
                     for (int x = 0; x < pw; x++)
                     {
                         int sxt = ((x - TerrainPad) % tw + tw) % tw;
-                        outPx[y * pw + x] = Whiten(src[(r * th + syt) * sw + (c * tw + sxt)], wash);
+                        Color p = src[(r * th + syt) * sw + (c * tw + sxt)];
+                        if (flatten > 0f) p = Mix(p, mean, flatten); // calmer, simpler ground
+                        if (rock) p = Greyify(p, 0.7f);              // grey mountain stone
+                        outPx[y * pw + x] = Whiten(p, wash);
                     }
                 }
                 pieces.Add(new Piece { Pixels = outPx, Width = pw, Height = ph });
