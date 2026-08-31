@@ -24,16 +24,33 @@ public sealed class CloudLayer : IDisposable
     private const int TexSize = 256;
 
     /// <summary>One cloud-texture tile spans this many iso pixels of world — large, so puffs read as clouds rather than aliasing into speckle.</summary>
-    private const float WorldPerTile = 3000f;
+    private const float WorldPerTile = 4200f;
 
-    /// <summary>Wind, in cloud-tiles per second — how fast the sheet slides over the land.</summary>
-    private static readonly Vector2 Wind = new(0.020f, 0.008f);
+    /// <summary>Base wind, in cloud-tiles per second — how fast the sheet slides over the land. Brisk, so it reads as a high, windy sky. Gusts are layered on top in <see cref="WindScroll"/>.</summary>
+    private static readonly Vector2 Wind = new(0.060f, 0.026f);
 
     /// <summary>Darkest a thick cloud shadow gets at full daylight.</summary>
     private const float ShadowStrength = 0.5f;
 
     /// <summary>Opacity of the clouds themselves.</summary>
     private const float CloudOpacity = 0.33f;
+
+    // --- "high in the sky, seen only from far off" ---------------------------
+    //
+    // The clouds live far above the land, so two things follow:
+    //   • You only notice them when you pull the camera back — up close the view is
+    //     under them. So they fade in as you zoom out and are gone when zoomed in.
+    //   • Being high up, they slide across the ground a touch slower than the land
+    //     itself as you pan (parallax), which reads as distance/altitude.
+
+    /// <summary>At or above this zoom the sky is empty — you are in too close to see the high clouds.</summary>
+    private const float CloudHiddenZoom = 0.85f;
+
+    /// <summary>At or below this zoom the clouds are at full strength — you have pulled back far enough to see the whole high sky.</summary>
+    private const float CloudFullZoom = 0.5f;
+
+    /// <summary>How much of the camera's pan the high sheet takes up (less than 1 = it lags the ground, the way distant, high things do).</summary>
+    private const float Parallax = 0.88f;
 
     private readonly Texture2D _tex;
     private readonly BasicEffect _fx;
@@ -72,12 +89,16 @@ public sealed class CloudLayer : IDisposable
         if (sky.Daylight <= 0.01f)
             return;
 
+        float show = ZoomVisibility(zoom);
+        if (show <= 0.004f)
+            return; // zoomed in under the clouds — nothing to cast.
+
         // The shadow lies on the ground under the cloud, thrown along the sun's
         // horizontal direction — so it slides away from the cloud as the sun lowers.
         // Alpha-blended (not multiplied), because the cloud's shape is in the texture's
         // alpha: only where the cloud is opaque does its dark colour reach the ground.
         Vector2 sunPush = HorizontalSunPush(sky);
-        byte a = (byte)(255 * ShadowStrength * sky.Daylight);
+        byte a = (byte)(255 * ShadowStrength * sky.Daylight * show);
         DrawOverlay(gd, focusIso, center, zoom, new Color((byte)18, (byte)20, (byte)28, a), sunPush,
                     BlendState.NonPremultiplied, isoTop, isoBottom);
     }
@@ -86,14 +107,29 @@ public sealed class CloudLayer : IDisposable
     public void DrawClouds(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom, SkyLight sky,
                            float isoTop, float isoBottom)
     {
+        float show = ZoomVisibility(zoom);
+        if (show <= 0.004f)
+            return; // in too close to see the high sky.
+
         // Clouds catch the sun's colour too — warm at dusk, white at noon — and dim
         // but never vanish at night.
         float lit = 0.35f + 0.65f * sky.Daylight;
         var tint = new Vector3(1f, 0.98f, 0.95f);
         tint = Vector3.Lerp(tint, sky.SunColor + new Vector3(0.4f), 0.35f * (1f - sky.Daylight));
-        var color = new Color(new Vector4(tint * lit, CloudOpacity));
+        var color = new Color(new Vector4(tint * lit, CloudOpacity * show));
         DrawOverlay(gd, focusIso, center, zoom, color, Vector2.Zero, BlendState.NonPremultiplied,
                     isoTop, isoBottom);
+    }
+
+    /// <summary>
+    /// How present the high clouds are at this zoom: 0 when zoomed in close (you are
+    /// below them), ramping smoothly to 1 as you pull the camera back far enough to
+    /// take in the whole sky.
+    /// </summary>
+    private static float ZoomVisibility(float zoom)
+    {
+        float t = (CloudHiddenZoom - zoom) / (CloudHiddenZoom - CloudFullZoom);
+        return Smooth(t);
     }
 
     private void DrawOverlay(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom,
@@ -113,14 +149,20 @@ public sealed class CloudLayer : IDisposable
         _fx.Projection = Matrix.CreateOrthographicOffCenter(0, w, h, 0, 0, 1);
 
         float drift = (float)_clock.Elapsed.TotalSeconds;
-        Vector2 scroll = Wind * drift + uvPush;
+        Vector2 scroll = WindScroll(drift) + uvPush;
+
+        // The sheet is high above the land, so it takes up only part of the camera's pan —
+        // parallax that reads as altitude. Fold that into the focus the corners map against.
+        Vector2 parallaxFocus = focusIso * Parallax;
 
         // Each screen corner maps back to a world-iso point; UVs come from that point,
         // so the cloud sheet is locked to the world and only the wind moves it.
-        SetCorner(0, 0, top, focusIso, center, zoom, color, scroll);
-        SetCorner(1, w, top, focusIso, center, zoom, color, scroll);
-        SetCorner(2, w, bottom, focusIso, center, zoom, color, scroll);
-        SetCorner(3, 0, bottom, focusIso, center, zoom, color, scroll);
+        // The quad spans the world's poles rather than the whole viewport; the UVs come
+        // off the parallax focus, so the sheet still lags the ground as it should.
+        SetCorner(0, 0, top, parallaxFocus, center, zoom, color, scroll);
+        SetCorner(1, w, top, parallaxFocus, center, zoom, color, scroll);
+        SetCorner(2, w, bottom, parallaxFocus, center, zoom, color, scroll);
+        SetCorner(3, 0, bottom, parallaxFocus, center, zoom, color, scroll);
 
         gd.BlendState = blend;
         gd.DepthStencilState = DepthStencilState.None;
@@ -139,6 +181,33 @@ public sealed class CloudLayer : IDisposable
         Vector2 iso = (new Vector2(sx, sy) - center) / zoom + focusIso;
         Vector2 uv = iso / WorldPerTile + scroll;
         _quad[i] = new VertexPositionColorTexture(new Vector3(sx, sy, 0f), color, uv);
+    }
+
+    /// <summary>
+    /// Where the cloud sheet has drifted to, in tile-space, after <paramref name="t"/>
+    /// seconds of wind. Not a straight line: on top of the steady drift the wind gusts
+    /// (surges and eases along its heading) and wanders (swings a little to either side),
+    /// so the sky churns the way a high, windy one does rather than sliding rigidly.
+    /// </summary>
+    private static Vector2 WindScroll(float t)
+    {
+        Vector2 steady = Wind * t;
+
+        // Wind heading, and the unit across it, to push the gust and the wander along.
+        float speed = Wind.Length();
+        Vector2 along = speed > 1e-5f ? Wind / speed : new Vector2(1f, 0f);
+        Vector2 across = new(-along.Y, along.X);
+
+        // Gust: the drift speeds up and slows down. Two out-of-step waves so the surges
+        // never fall into an obvious rhythm.
+        float gust = 0.35f * MathF.Sin(t * 0.23f) + 0.18f * MathF.Sin(t * 0.61f + 1.3f);
+
+        // Wander: the heading swings gently to one side and back.
+        float wander = 0.5f * MathF.Sin(t * 0.17f + 2.1f) + 0.22f * MathF.Sin(t * 0.43f);
+
+        // Kept small enough that a gust only speeds or eases the drift — it never
+        // outruns the steady flow and reverses it, which high wind does not do.
+        return steady + along * (speed * 3f * gust) + across * (speed * 2.5f * wander);
     }
 
     /// <summary>Horizontal shove given to the shadow: further out as the sun sinks.</summary>
