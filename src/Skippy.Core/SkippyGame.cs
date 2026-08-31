@@ -190,6 +190,11 @@ public class SkippyGame : Game
     /// <summary>A tile position as "x y" — east first, then south, both signed.</summary>
     private static string Coords(int x, int y) => x + " " + y;
 
-    /// <summary>A 0..1 field as whole percent — a 3×5 font has no room for decimals.</summary>
-    private static int Percent(float value) => (int)MathF.Round(value * 100f);
+    /// <summary>
+    /// A 0..1 field as whole percent, sign and all, so it reads as a share of a hundred
+    /// rather than as a bare number on some scale of its own. Whole percent because a 3×5
+    /// font has no room for decimals.
+    /// </summary>
+    private static string Percent(float value)
+        => ((int)MathF.Round(value * 100f)).ToString(CultureInfo.InvariantCulture) + "%";
 }

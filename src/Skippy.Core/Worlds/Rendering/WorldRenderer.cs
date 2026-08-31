@@ -1029,7 +1029,7 @@ public sealed class WorldRenderer : IDisposable
                 // coastal cut has moved the visible waterline away from, so it now floats
                 // offset in the water. The smooth shore reads as wet beach without it.
                 if (world.MapView == MapView.Biome)
-                    AppendScatter(world, tile, a, b, c, d, tx, ty, ox, oy, lx, ly, shore);
+                    AppendScatter(world, tile, tx, ty, ox, oy, lx, ly, shore);
             }
         }
 
@@ -2242,7 +2242,7 @@ public sealed class WorldRenderer : IDisposable
     /// tile stands in (see <see cref="Forests"/>) — so one temperate forest comes up
     /// evergreen and the next one over comes up broadleaf, off the same case below.
     /// </summary>
-    private void AppendScatter(World world, in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty,
+    private void AppendScatter(World world, in Tile tile, int tx, int ty,
                                int ox, int oy, int lx, int ly, bool shore)
     {
         // Seeded from the tile's canonical position, not its raw one, so a wood looks the
@@ -2310,7 +2310,22 @@ public sealed class WorldRenderer : IDisposable
                 if (couldSnow)
                     snow = Smoothstep01(SnowCover(ox, oy, lx + u, ly + v) * (0.7f + 0.6f * rng.Next()) * SnowCanopy);
 
-                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits(), snow,
+                // A plant stands on the ground that is actually drawn. That ground is a
+                // smooth (Catmull-Rom) surface through the level field — see
+                // <see cref="EmitSmoothTile"/> — not the flat quad through the tile's four
+                // corners, and inside a tile the two part company by however much the
+                // rounding-off moved the surface. Placing plants on the flat quad left them
+                // hanging in the air wherever the smoothed ground dipped below it: barely
+                // noticeable under a tree, which is tall enough for a few pixels to hide in
+                // and has a trunk running down to the ground anyway, but plain on a bush,
+                // where the same few pixels are a good fraction of the whole plant. The
+                // mobs already stood on the smooth surface (see <see cref="SurfaceLevel"/>);
+                // this is the same thing for everything rooted in it.
+                float ground = SmoothLevel(lx + u, ly + v);
+                if (shore)
+                    ground = MathF.Max(waterLevel, ground); // as the shore ground itself is cut
+
+                _veg.Add(new VegItem(Iso.TileToIso(tx + u, ty + v, ground), kind, s, dead, rng.NextBits(), snow,
                                      IsTree(kind) ? forestVariant : NoVariant));
             }
         }
@@ -3151,9 +3166,6 @@ public sealed class WorldRenderer : IDisposable
         t = Math.Clamp(t, 0f, 1f);
         return t * t * (3f - 2f * t);
     }
-
-    private static Vector2 Bilerp(Vector2 a, Vector2 b, Vector2 c, Vector2 d, float u, float v)
-        => Vector2.Lerp(Vector2.Lerp(a, b, u), Vector2.Lerp(d, c, u), v);
 
     private static int LevelAt(World world, int wx, int wy) => world.TryGetTile(wx, wy, out Tile t) ? t.Level : 0;
 
