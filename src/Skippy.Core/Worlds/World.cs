@@ -17,7 +17,11 @@ namespace Skippy.Core.Worlds;
 /// top of the streaming + isometric-rendering machinery.
 ///
 /// The map is effectively infinite: chunks are generated on demand in a radius
-/// around the camera and discarded once well outside it.
+/// around the camera and discarded once well outside it. That generation happens on
+/// worker threads (<see cref="ChunkBuilder"/>) rather than in the frame that asks for
+/// it, so walking into new ground costs the update thread nothing but the delivery. The
+/// ground arrives a frame or two behind the camera, and until it does there is nothing
+/// there to draw — the black the screen is cleared to stands in for it.
 /// </summary>
 public class World
 {
@@ -60,10 +64,34 @@ public class World
     /// </summary>
     public WorldBounds Bounds => Settings.Bounds;
 
-    protected IWorldGenerator Generator { get; }
+    /// <summary>
+    /// What the ground is made from. Not readonly: <see cref="Regenerate"/> replaces it
+    /// rather than resetting it, so that chunks still out with the workers can finish
+    /// harmlessly against the generator they were started on — see there.
+    /// </summary>
+    protected IWorldGenerator Generator { get; private set; }
+
+    /// <summary>
+    /// The workers that build the chunks, off the update thread. Replaced with the
+    /// generator it is bound to.
+    /// </summary>
+    private ChunkBuilder _builder;
 
     private readonly Dictionary<ChunkCoord, Chunk> _chunks = new();
     private readonly List<ChunkCoord> _unloadScratch = new();
+
+    /// <summary>
+    /// The chunks wanted this frame and not yet had, sorted nearest-first. A field so the
+    /// streaming allocates nothing per frame.
+    /// </summary>
+    private readonly List<ChunkCoord> _wanted = new();
+
+    /// <summary>The chunk the camera is over, as of this frame's streaming pass.</summary>
+    private ChunkCoord _streamFocus;
+
+    /// <summary>Held rather than written inline so sorting <see cref="_wanted"/> allocates no closure.</summary>
+    private readonly Comparison<ChunkCoord> _nearestFirst;
+
     private WorldRenderer? _renderer;
 
     /// <summary>
@@ -97,7 +125,9 @@ public class World
     {
         Seed = seed;
         Generator = CreateGenerator(seed);
+        _builder = new ChunkBuilder(Generator);
         _mobSeeds = new Random(seed);
+        _nearestFirst = (a, b) => DistanceToFocus(a).CompareTo(DistanceToFocus(b));
 
         // Open on the equator. (0,0) is a corner of the map — the north pole — and a world
         // that started there would start at its edge, looking half into the black.
@@ -112,18 +142,17 @@ public class World
 
     public int LoadedChunkCount => _chunks.Count;
 
-    /// <summary>Returns the chunk at <paramref name="coord"/>, generating it if needed.</summary>
-    public Chunk GetChunk(ChunkCoord coord)
-    {
-        if (!_chunks.TryGetValue(coord, out Chunk? chunk))
-        {
-            chunk = new Chunk(coord);
-            Generator.Generate(chunk);
-            _chunks[coord] = chunk;
-            OnChunkGenerated(chunk);
-        }
-        return chunk;
-    }
+    /// <summary>How many chunks are being built by the workers right now.</summary>
+    public int BuildingChunkCount => _builder.InFlight;
+
+    /// <summary>How many chunks are having their geometry built by the meshing workers.</summary>
+    public int MeshingChunkCount => _renderer?.MeshingChunkCount ?? 0;
+
+    /// <summary>
+    /// Whether this chunk is being built right now — asked for, not yet arrived. Nothing
+    /// can be read of it, and there is nothing to draw where it will be.
+    /// </summary>
+    public bool IsChunkBuilding(ChunkCoord coord) => _builder.IsBuilding(coord);
 
     /// <summary>Hook fired the first time a chunk is generated (e.g. to spawn entities).</summary>
     protected virtual void OnChunkGenerated(Chunk chunk) { }
@@ -371,8 +400,15 @@ public class World
     {
         // The generator remembers things about the ground it has built that a position
         // alone cannot answer — which water is a lake, for one — and that ground is about
-        // to change under it.
-        Generator.Reset();
+        // to change under it. It is *replaced* rather than reset, because there may be
+        // workers inside it at this very moment: a reset would pull the fields out from
+        // under them mid-chunk. Handing them the old generator to finish against and
+        // starting fresh here costs a handful of noise tables and needs no lock at all.
+        Generator = CreateGenerator(Seed);
+
+        // Dropped with it, so the chunks those workers are still building are delivered
+        // to nobody. They were cut from a world that no longer exists.
+        _builder = new ChunkBuilder(Generator);
 
         _chunks.Clear();
         _mobs.Clear();
@@ -389,30 +425,89 @@ public class World
         _renderer?.Invalidate();
     }
 
-    /// <summary>Loads chunks within <see cref="LoadRadius"/> of the camera and unloads the rest.</summary>
+    /// <summary>
+    /// Keeps the chunks within <see cref="LoadRadius"/> of the camera coming, and unloads
+    /// the rest.
+    ///
+    /// Nothing is built here. The frame's job is only to take delivery of whatever the
+    /// workers finished since the last one and to say what it wants next; the building
+    /// itself happens on the workers, which is what keeps a step across a chunk border
+    /// from costing seven chunks' worth of noise in the frame it is taken. A chunk that
+    /// has been asked for and not yet arrived is simply not in the world: nothing reads
+    /// it, nothing draws it, and the black behind the map shows through where it will be.
+    /// </summary>
     protected virtual void StreamChunks()
     {
         int fcx = FloorDiv((int)MathF.Floor(Camera.FocusTile.X), Chunk.Size);
         int fcy = FloorDiv((int)MathF.Floor(Camera.FocusTile.Y), Chunk.Size);
+        _streamFocus = new ChunkCoord(fcx, fcy);
 
+        // Here, on the update thread, with no worker running yet this frame: the dials may
+        // have moved since the last one, and the fields the workers read are cut to fit them.
+        Generator.Prepare();
+
+        // Take delivery. A chunk that has drifted out of range while it was being built is
+        // dropped rather than filed — it would only be unloaded again at the foot of this
+        // very method, and the camera has plainly gone the other way.
+        while (_builder.TryTakeFinished(out Chunk built))
+        {
+            if (IsBeyondUnloadRange(built.Coord))
+                continue;
+
+            _chunks[built.Coord] = built;
+            OnChunkGenerated(built);
+        }
+
+        // What is still missing, nearest first, so the ground closest to the camera — the
+        // ground the player is most likely to be looking at — is the ground that fills in
+        // first. Re-picked from scratch every frame, so a camera that turns around is
+        // followed by the workers rather than by a stale queue.
+        _wanted.Clear();
         for (int cy = -LoadRadius; cy <= LoadRadius; cy++)
             for (int cx = -LoadRadius; cx <= LoadRadius; cx++)
             {
                 var coord = new ChunkCoord(fcx + cx, fcy + cy);
-                if (IsChunkBeyondThePoles(coord))
+                if (IsChunkBeyondThePoles(coord) || _chunks.ContainsKey(coord) || _builder.IsBuilding(coord))
                     continue;
 
-                GetChunk(coord);
+                _wanted.Add(coord);
             }
+
+        if (_wanted.Count > 1)
+            _wanted.Sort(_nearestFirst);
+
+        foreach (ChunkCoord coord in _wanted)
+        {
+            if (_builder.AtCapacity)
+                break;
+
+            _builder.Request(coord);
+        }
 
         _unloadScratch.Clear();
         foreach (KeyValuePair<ChunkCoord, Chunk> kv in _chunks)
         {
-            if (Math.Abs(kv.Key.X - fcx) > LoadRadius + 1 || Math.Abs(kv.Key.Y - fcy) > LoadRadius + 1)
+            if (IsBeyondUnloadRange(kv.Key))
                 _unloadScratch.Add(kv.Key);
         }
         foreach (ChunkCoord key in _unloadScratch)
             _chunks.Remove(key);
+    }
+
+    /// <summary>
+    /// Whether a chunk sits far enough outside the load window to be let go. A ring wider
+    /// than <see cref="LoadRadius"/>, so a camera drifting to and fro across a border does
+    /// not throw away the chunk it is about to ask for again.
+    /// </summary>
+    private bool IsBeyondUnloadRange(ChunkCoord coord)
+        => Math.Abs(coord.X - _streamFocus.X) > LoadRadius + 1
+        || Math.Abs(coord.Y - _streamFocus.Y) > LoadRadius + 1;
+
+    /// <summary>How far a chunk is from the one the camera is over, squared (only the order matters).</summary>
+    private int DistanceToFocus(ChunkCoord coord)
+    {
+        int dx = coord.X - _streamFocus.X, dy = coord.Y - _streamFocus.Y;
+        return dx * dx + dy * dy;
     }
 
     /// <summary>

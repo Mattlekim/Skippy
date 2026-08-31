@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using Microsoft.Xna.Framework;
 using Microsoft.Xna.Framework.Graphics;
@@ -7,13 +8,20 @@ namespace Skippy.Core.Worlds.Rendering;
 
 /// <summary>
 /// CPU-side accumulator for textured, vertex-coloured triangles. Geometry is
-/// appended in iso-space, then <see cref="Upload"/> hands back a
-/// <see cref="ChunkMesh"/> whose data lives in static GPU buffers.
+/// appended in iso-space, then <see cref="Build"/> hands back a <see cref="MeshData"/>
+/// — the finished geometry in plain arrays, which the main thread turns into GPU
+/// buffers with <see cref="MeshData.Upload"/>.
 ///
-/// One instance is reused for every chunk build, so a warmed-up builder does no
-/// per-build allocation beyond the GPU buffers themselves. Indices are 16-bit
-/// for the widest platform support (WebGL included); if a chunk needs more than
-/// ~65k vertices (a dense forest) the geometry is transparently split into
+/// <para>
+/// It holds no graphics device on purpose. Nothing here needs one, and not having one
+/// is what lets a whole chunk's geometry be worked out on a worker thread; see
+/// <see cref="ChunkMesher"/>. One builder is reused for every chunk a worker builds, so
+/// a warmed-up builder allocates nothing per build — its own scratch arrays grow once
+/// and stay, and the arrays it hands out come from a pool.
+/// </para>
+///
+/// Indices are 16-bit for the widest platform support (WebGL included); if a chunk needs
+/// more than ~65k vertices (a dense forest) the geometry is transparently split into
 /// several segments that draw back to back.
 /// </summary>
 public sealed class MeshBuilder
@@ -23,12 +31,11 @@ public sealed class MeshBuilder
     /// <summary>Sprites and lines are flat, screen-facing billboards; they light as if facing straight up.</summary>
     private static readonly Vector3 Up = new(0f, 1f, 0f);
 
-    private readonly GraphicsDevice _gd;
     private TerrainVertex[] _verts = new TerrainVertex[16384];
     private ushort[] _indices = new ushort[24576];
     private int _vertCount, _indexCount;
 
-    private readonly List<ChunkMesh.Segment> _segments = new();
+    private readonly List<MeshData.Segment> _segments = new();
     private Vector2 _min, _max;
 
     /// <summary>
@@ -39,8 +46,6 @@ public sealed class MeshBuilder
     /// it. Shadows keep their own lean in z (see <see cref="ShadowSprite"/>) and ignore this.
     /// </summary>
     public float DepthZ;
-
-    public MeshBuilder(GraphicsDevice gd) => _gd = gd;
 
     public void Clear()
     {
@@ -192,18 +197,23 @@ public sealed class MeshBuilder
     /// </summary>
     public ChunkMesh.Cursor Mark() => new(_segments.Count, _indexCount);
 
-    /// <summary>Copies everything accumulated since <see cref="Clear"/> into GPU buffers.</summary>
-    public ChunkMesh Upload(byte neighborMask, List<ChunkMesh.Slice>? slices = null)
+    /// <summary>
+    /// Hands back everything accumulated since <see cref="Clear"/> as a
+    /// <see cref="MeshData"/>, ready to be uploaded on the main thread. Ownership of the
+    /// pooled arrays moves with it, so the result must be uploaded or discarded exactly
+    /// once; the builder keeps nothing and is ready for the next chunk.
+    /// </summary>
+    public MeshData Build(byte neighborMask, List<ChunkMesh.Slice>? slices = null)
     {
         FlushSegment();
         bool empty = _segments.Count == 0;
-        var mesh = new ChunkMesh(new List<ChunkMesh.Segment>(_segments),
-                                 empty ? Vector2.Zero : _min,
-                                 empty ? Vector2.Zero : _max,
-                                 neighborMask,
-                                 slices is null ? null : new List<ChunkMesh.Slice>(slices));
-        _segments.Clear(); // ownership of the buffers has moved to the mesh
-        return mesh;
+        var data = new MeshData(new List<MeshData.Segment>(_segments),
+                                empty ? Vector2.Zero : _min,
+                                empty ? Vector2.Zero : _max,
+                                neighborMask,
+                                slices is null ? null : new List<ChunkMesh.Slice>(slices));
+        _segments.Clear(); // ownership of the rented arrays has moved to the data
+        return data;
     }
 
     // ---- internals ---------------------------------------------------------
@@ -220,16 +230,22 @@ public sealed class MeshBuilder
         return b;
     }
 
+    /// <summary>
+    /// Seals off the geometry gathered so far into a segment, copying it into arrays the
+    /// finished <see cref="MeshData"/> owns. Rented rather than allocated: a dense chunk
+    /// runs to megabytes of vertices, and allocating that per chunk would only move the
+    /// stutter into the garbage collector.
+    /// </summary>
     private void FlushSegment()
     {
         if (_vertCount == 0) return;
 
-        var vb = new VertexBuffer(_gd, TerrainVertex.VertexDeclaration, _vertCount, BufferUsage.WriteOnly);
-        vb.SetData(_verts, 0, _vertCount);
-        var ib = new IndexBuffer(_gd, IndexElementSize.SixteenBits, _indexCount, BufferUsage.WriteOnly);
-        ib.SetData(_indices, 0, _indexCount);
+        TerrainVertex[] verts = ArrayPool<TerrainVertex>.Shared.Rent(_vertCount);
+        Array.Copy(_verts, verts, _vertCount);
+        ushort[] indices = ArrayPool<ushort>.Shared.Rent(_indexCount);
+        Array.Copy(_indices, indices, _indexCount);
 
-        _segments.Add(new ChunkMesh.Segment(vb, ib, _indexCount / 3));
+        _segments.Add(new MeshData.Segment(verts, _vertCount, indices, _indexCount));
         _vertCount = 0;
         _indexCount = 0;
     }

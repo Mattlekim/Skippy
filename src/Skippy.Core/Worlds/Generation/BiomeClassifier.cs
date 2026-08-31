@@ -26,7 +26,7 @@ public static class BiomeClassifier
     /// The wettest ground that may still come out as open dry country — desert or savanna.
     ///
     /// Heat alone does not make a plain; the want of rain does. Ground at 40 °C carrying
-    /// 60% moisture is rainforest, not savanna — the hot, wet corner of the diagram is
+    /// half its moisture is rainforest, not savanna — the hot, wet corner of the diagram is
     /// where the jungles are, and the only reason the tropics hold open country at all is
     /// that the subtropical belt is dry (see the rainfall cells in
     /// <see cref="DefaultWorldGenerator"/>). The hot band used to let savanna run to 74%,
@@ -35,7 +35,7 @@ public static class BiomeClassifier
     /// Below this, the dry country still grades properly: desert at its driest, savanna
     /// between, jungle beyond — which is the Sahel's own order as you walk south.
     /// </summary>
-    private const float DryCountryLimit = 0.58f;
+    private const float DryCountryLimit = 0.50f;
 
     /// <summary>The two moisture thresholds within each temperature band, driest first.</summary>
     private static readonly float[][] MoistureBands =

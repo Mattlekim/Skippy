@@ -128,6 +128,14 @@ public struct Tile
     /// </summary>
     public float Patch;
 
+    /// <summary>
+    /// How open this ground is to the sky, 0..1. Low is closed canopy; high is a clearing.
+    /// A wood is not a solid block of trees — it has glades in it — and this is the field
+    /// that puts them there, at its own scale, independent of how densely the tile would
+    /// otherwise be planted. Only wooded biomes read it; open country is open already.
+    /// </summary>
+    public float Clearing;
+
     public Biome Biome;
     public Vegetation Vegetation;
 

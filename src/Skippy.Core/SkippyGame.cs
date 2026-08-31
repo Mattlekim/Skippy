@@ -136,6 +136,17 @@ public class SkippyGame : Game
         _hudLines.Add("VIEW " + _world.MapView.Name());
         _hudLines.Add("DEPTH " + (_world.DepthBuffer ? "ON" : "OFF") + " (B)");
 
+        // Chunks loaded, and how many the workers still have on the bench. The second
+        // number is what the black patches at the edge of the map are: ground asked for
+        // and not yet built. It should sit at zero whenever the camera is standing still.
+        _hudLines.Add("CHUNKS " + _world.LoadedChunkCount
+                    + (_world.BuildingChunkCount > 0 ? " +" + _world.BuildingChunkCount : string.Empty));
+
+        // And how many are having their geometry cut. Like the count above it should fall
+        // back to zero the moment the camera stops.
+        if (_world.MeshingChunkCount > 0)
+            _hudLines.Add("MESHING " + _world.MeshingChunkCount);
+
         // The clock reads as a wall clock, and says so when it is being held still.
         _hudLines.Add("TIME " + _world.Sky.Hour.ToString("00", CultureInfo.InvariantCulture)
                     + ":" + _world.Sky.Minute.ToString("00", CultureInfo.InvariantCulture)

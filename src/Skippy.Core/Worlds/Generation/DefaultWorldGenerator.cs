@@ -78,11 +78,12 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private readonly PerlinNoise _patchNoise;
     private readonly PerlinNoise _mountainNoise;
     private readonly PerlinNoise _coastNoise;
+    private readonly PerlinNoise _clearingNoise;
 
     // The same fields, fitted to the world's current size. Rebuilt whenever the size
     // dial moves, since every frequency is snapped to the circumference.
     private Field _height, _temperature, _moisture, _vegetation;
-    private Field _stand, _species, _patch, _mountains, _ridge, _coast, _clump;
+    private Field _stand, _species, _patch, _mountains, _ridge, _coast, _clump, _clearing;
     private int _fittedSpan;
 
     /// <summary>
@@ -133,6 +134,15 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     /// </summary>
     private const float VegetationScale = 0.06f;
     private const float ClumpScale = 0.35f;
+
+    /// <summary>
+    /// Frequency of the clearing field — the glades a wood is broken up by. About a
+    /// twenty-five-tile wavelength: big enough to stand in and read as a clearing with
+    /// forest all round it, small enough that a wood holds several. Deliberately its own
+    /// field rather than a reading of the planting density, so a glade is a gap in the
+    /// canopy wherever it falls, not merely the thinnest part of an already-thin wood.
+    /// </summary>
+    private const float ClearingScale = 0.04f;
 
     // ---- climate --------------------------------------------------------------
     // The climate fields are the exception: they are *global*, sized as a fraction of
@@ -193,6 +203,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         _patchNoise = new PerlinNoise(seed * 13 + 41);
         _mountainNoise = new PerlinNoise(seed * 101 + 5);
         _coastNoise = new PerlinNoise(seed * 211 + 13);
+        _clearingNoise = new PerlinNoise(seed * 313 + 67);
         Fit();
 
         // The finished height — cleaned coast and all — is what the tiles themselves are
@@ -207,15 +218,15 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private WorldBounds Bounds => _settings.Bounds;
 
     /// <summary>
-    /// Drops what was worked out about the world that has just been thrown away. The dials
-    /// have moved, so the ground is about to come out differently shaped and last world's
-    /// lakes are no guide to this one's.
+    /// Cuts every field to fit the world it is closing around, in case the size dial has
+    /// moved since the last chunk was built.
+    ///
+    /// This is why <see cref="Fit"/> is not called from <see cref="Generate"/>, where it
+    /// used to live: the chunks are built on worker threads now, and the fields they read
+    /// cannot be rewritten underneath them. The world calls this on the update thread with
+    /// no worker running — see <see cref="IWorldGenerator.Prepare"/>.
     /// </summary>
-    public void Reset()
-    {
-        _lakes.Clear();
-        Fit();
-    }
+    public void Prepare() => Fit();
 
     // ---- fitting the fields to the world -----------------------------------
 
@@ -251,6 +262,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         _species = Local(_speciesNoise, SpeciesScale);
         _vegetation = Local(_vegetationNoise, VegetationScale);
         _clump = Local(_vegetationNoise, ClumpScale);
+        _clearing = Local(_clearingNoise, ClearingScale);
 
         _temperature = Global(_temperatureNoise, TemperatureCells);
         _moisture = Global(_moistureNoise, MoistureCells);
@@ -402,11 +414,14 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         return h;
     }
 
+    /// <summary>
+    /// Builds one chunk. Called from a worker thread, and from several at once: every
+    /// field it reads was fixed by <see cref="Prepare"/> before any worker started, and
+    /// the only thing here that remembers anything — <see cref="LakeFinder"/> — carries
+    /// its own answer to being shared.
+    /// </summary>
     public void Generate(Chunk chunk)
     {
-        // The size dial may have moved since the last chunk was built, and every field's
-        // frequency is cut to fit the world it is closing around.
-        Fit();
         WorldBounds bounds = Bounds;
 
         for (int ly = 0; ly < Chunk.Size; ly++)
@@ -476,6 +491,11 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
                     // Low-frequency clumping field: how densely this tile is planted.
                     VegetationDensity = _vegetation.Fractal01(u, v, octaves: 1),
                     Patch = _patch.Fractal01(u, v, octaves: 3),
+
+                    // Spread for the same reason the climate fields are: raw fBm bunches
+                    // around the middle, and the glades are cut from this field's top end,
+                    // which a bunched field barely reaches.
+                    Clearing = Spread(_clearing.Fractal01(u, v, ClimateOctaves)),
 
                     // Past a pole there is no world. The tile is still worked out in full —
                     // the ground the last row in the world stands on has to be lit and

@@ -56,6 +56,55 @@ A `Tile` is a value type (`Height`, `Level`, `Temperature`, `Moisture`, `Biome`,
 `Vegetation`, `IsVoid`), so a chunk is one contiguous array with no per-tile
 allocation.
 
+### Chunks are built off the update thread
+
+A chunk is not cheap. Each of its 1024 tiles is a dozen-odd octaves of noise, and
+the coastal cleanup alone evaluates the height field nine times over near a
+shoreline. Built inside `StreamChunks`, one after another, a single step across a
+chunk border cost seven chunks in the frame that took the step — and that frame was
+the one on screen.
+
+So `ChunkBuilder` builds them on worker threads instead. `StreamChunks` no longer
+generates anything: each frame it takes delivery of whatever the workers finished,
+then asks for what is still missing, **nearest chunk first**, up to a cap of
+`Capacity` (one per spare core, doubled) in flight at once. Capping it is what keeps
+the queue answerable to the camera — only that many are committed to, so a camera
+that turns around is followed by the workers rather than by a stale backlog.
+
+**A chunk that has not arrived is simply not in the world.** Nothing reads it,
+nothing draws it, and the screen is cleared to black — so ground still being built
+shows as black until it lands. That is the whole of the placeholder; there is no
+placeholder geometry anywhere. `World.BuildingChunkCount` is on the HUD (`CHUNKS
+49 +6`) and should sit at zero whenever the camera is standing still.
+
+Two things had to answer for being shared by the workers:
+
+- **The generator.** `IWorldGenerator.Generate` is now called from several threads at
+  once. For fields of position-indexed noise that is free — everything read is fixed
+  at construction. Anything that changes with the world's dials moved into
+  `IWorldGenerator.Prepare`, which the world calls on the update thread with no worker
+  running; that is where `DefaultWorldGenerator` re-fits its fields to the world's size,
+  and it is why `Fit()` is no longer called from `Generate`.
+- **`LakeFinder`**, the one thing in generation that remembers anything. Its verdicts
+  moved to a `ConcurrentDictionary` and its flood buffers became `[ThreadStatic]`. No
+  lock: the order-independence below is what makes that enough — two threads that flood
+  the same body both measure it and both file the same answer, and a flood can never
+  cross into another body, so every verdict it meets belongs to the body it is measuring.
+
+`World.Regenerate` **replaces** the generator rather than resetting it, and drops the
+`ChunkBuilder` with it. There may be workers inside the old generator at that moment,
+and resetting it would pull the fields out from under them mid-chunk; letting them
+finish against a generator nobody is listening to costs a handful of noise tables and
+needs no lock at all.
+
+Turning tiles into geometry stays on the update thread — it ends in GPU buffers, which
+belong to the thread that owns the device — so that half is *spread* instead:
+`WorldRenderer.MeshBuildsPerFrame` caps how many chunks may be meshed per frame. Without
+it the stutter would only have moved from generating chunks to meshing them the moment
+several landed together. A chunk waiting its turn with no mesh yet is not drawn (black
+again); one waiting to be *re*built because a neighbour appeared goes on drawing the
+mesh it has.
+
 ## The world is a planet
 
 The world is a **band that wraps east–west** and has **poles north and south**
@@ -278,9 +327,11 @@ with the body's verdict, and a flood that reaches a filed tile stops and takes i
 answer — so the first tile of an ocean costs a 500-tile flood and the rest of that
 ocean costs a dictionary lookup. Chunk generation measures ~40% slower over water
 because of it. The cache is dropped when it grows past a cap (the map is endless,
-the camera comes back) and on `World.Regenerate` through `IWorldGenerator.Reset`,
-where the ground itself is about to change; losing it costs work, never
-correctness.
+the camera comes back), and it goes with the generator on `World.Regenerate`, where
+the ground itself is about to change; losing it costs work, never correctness.
+
+Those two properties are also what let several workers flood at once without a lock
+— see [Chunks are built off the update thread](#chunks-are-built-off-the-update-thread).
 
 Lakes wear the shallow-water tile rather than the deep blue, and no surf breaks on
 them — `CollectShore` gates on `Tile.IsSea`, so a lake's edge is still water meeting
