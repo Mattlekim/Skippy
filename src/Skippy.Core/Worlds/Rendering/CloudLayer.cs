@@ -60,8 +60,14 @@ public sealed class CloudLayer : IDisposable
     /// Draws the cloud shadows (then, from <see cref="DrawClouds"/>, the clouds). The
     /// caller supplies the same focus/zoom the world was drawn with so the overlay
     /// lines up, plus the sun to fade and offset by.
+    ///
+    /// <paramref name="isoTop"/> and <paramref name="isoBottom"/> are the world's two
+    /// poles in iso space. The sheet is cut to them: there is no sky past the end of the
+    /// world, and a cloud drifting on over the black would be the one thing still saying
+    /// the map goes on out there.
     /// </summary>
-    public void DrawShadows(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom, SkyLight sky)
+    public void DrawShadows(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom, SkyLight sky,
+                            float isoTop, float isoBottom)
     {
         if (sky.Daylight <= 0.01f)
             return;
@@ -72,11 +78,13 @@ public sealed class CloudLayer : IDisposable
         // alpha: only where the cloud is opaque does its dark colour reach the ground.
         Vector2 sunPush = HorizontalSunPush(sky);
         byte a = (byte)(255 * ShadowStrength * sky.Daylight);
-        DrawOverlay(gd, focusIso, center, zoom, new Color((byte)18, (byte)20, (byte)28, a), sunPush, BlendState.NonPremultiplied);
+        DrawOverlay(gd, focusIso, center, zoom, new Color((byte)18, (byte)20, (byte)28, a), sunPush,
+                    BlendState.NonPremultiplied, isoTop, isoBottom);
     }
 
     /// <summary>The clouds themselves, drawn last so they sit above the world.</summary>
-    public void DrawClouds(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom, SkyLight sky)
+    public void DrawClouds(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom, SkyLight sky,
+                           float isoTop, float isoBottom)
     {
         // Clouds catch the sun's colour too — warm at dusk, white at noon — and dim
         // but never vanish at night.
@@ -84,13 +92,24 @@ public sealed class CloudLayer : IDisposable
         var tint = new Vector3(1f, 0.98f, 0.95f);
         tint = Vector3.Lerp(tint, sky.SunColor + new Vector3(0.4f), 0.35f * (1f - sky.Daylight));
         var color = new Color(new Vector4(tint * lit, CloudOpacity));
-        DrawOverlay(gd, focusIso, center, zoom, color, Vector2.Zero, BlendState.NonPremultiplied);
+        DrawOverlay(gd, focusIso, center, zoom, color, Vector2.Zero, BlendState.NonPremultiplied,
+                    isoTop, isoBottom);
     }
 
     private void DrawOverlay(GraphicsDevice gd, Vector2 focusIso, Vector2 center, float zoom,
-                             Color color, Vector2 uvPush, BlendState blend)
+                             Color color, Vector2 uvPush, BlendState blend, float isoTop, float isoBottom)
     {
         int w = gd.Viewport.Width, h = gd.Viewport.Height;
+
+        // The world's poles are lines of constant iso Y, which come out as two horizontal
+        // lines on screen — so cutting the sheet to the world is just clipping the quad's
+        // top and bottom. The UVs are worked out per corner from where that corner lands
+        // in the world, so the cropped sheet still lines up with the uncropped one.
+        float top = MathF.Max(0f, (isoTop - focusIso.Y) * zoom + center.Y);
+        float bottom = MathF.Min(h, (isoBottom - focusIso.Y) * zoom + center.Y);
+        if (bottom - top < 1f)
+            return; // the world is entirely off screen
+
         _fx.Projection = Matrix.CreateOrthographicOffCenter(0, w, h, 0, 0, 1);
 
         float drift = (float)_clock.Elapsed.TotalSeconds;
@@ -98,10 +117,10 @@ public sealed class CloudLayer : IDisposable
 
         // Each screen corner maps back to a world-iso point; UVs come from that point,
         // so the cloud sheet is locked to the world and only the wind moves it.
-        SetCorner(0, 0, 0, focusIso, center, zoom, color, scroll);
-        SetCorner(1, w, 0, focusIso, center, zoom, color, scroll);
-        SetCorner(2, w, h, focusIso, center, zoom, color, scroll);
-        SetCorner(3, 0, h, focusIso, center, zoom, color, scroll);
+        SetCorner(0, 0, top, focusIso, center, zoom, color, scroll);
+        SetCorner(1, w, top, focusIso, center, zoom, color, scroll);
+        SetCorner(2, w, bottom, focusIso, center, zoom, color, scroll);
+        SetCorner(3, 0, bottom, focusIso, center, zoom, color, scroll);
 
         gd.BlendState = blend;
         gd.DepthStencilState = DepthStencilState.None;

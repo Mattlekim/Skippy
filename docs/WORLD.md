@@ -37,7 +37,7 @@ public sealed class CampaignWorld : World
 }
 ```
 
-## Infinite world via chunks
+## Streaming via chunks
 
 The map is broken into fixed **32×32-tile chunks** (`Chunk.Size`). 32 is a
 deliberate middle ground: big enough that per-chunk overhead is amortized over
@@ -48,47 +48,126 @@ cleanly. Chunks are:
 - generated on demand within `LoadRadius` chunks of the camera,
 - discarded once outside it.
 
-So the world is **effectively infinite** — walk in any direction and terrain
-keeps generating, deterministically (same seed + coordinate ⇒ same tile), because
-generation is driven by coordinate-based noise rather than any fixed-size buffer.
+Nothing is ever stored for the map as a whole: generation is driven by
+coordinate-based noise rather than by any fixed-size buffer, so it stays
+deterministic (same seed + coordinate ⇒ same tile) however you wander into it.
 
 A `Tile` is a value type (`Height`, `Level`, `Temperature`, `Moisture`, `Biome`,
-`Vegetation`), so a chunk is one contiguous array with no per-tile allocation.
+`Vegetation`, `IsVoid`), so a chunk is one contiguous array with no per-tile
+allocation.
+
+## The world is a planet
+
+The world is a **band that wraps east–west** and has **poles north and south**
+(`WorldBounds`). Walk far enough east and you come back round to where you
+started; walk north or south far enough and the ground runs out and there is
+black beyond it.
+
+The map is isometric, so the tile grid's own x and y both run diagonally on
+screen — a rectangle in tile space would draw as a *diamond*, with its edges
+heading off in two directions at once. So the world is not bounded in x and y. It
+is bounded in the two axes you actually see:
+
+| Axis | Meaning | Bounded? |
+| --- | --- | --- |
+| `v = x + y` | straight down the screen — north to south | yes: `Span` tiles pole to pole |
+| `u = x − y` | straight across the screen — west to east | no: repeats every `2 × Span` |
+
+So the horizontal extent is exactly **twice** the vertical one, and the map holds
+`Span²` tiles. On screen it reads as a wide horizontal strip, the way a world map
+does, rather than as a diagonal ribbon.
+
+**There is no seam, because there is no join.** A lap east is the tile-space move
+`(x, y) → (x + Span, y − Span)`, and *every* field the generator is built from is
+periodic under exactly that move. So the coordinates simply keep counting up and
+the same ground comes round again — no teleport, no stitching, no special case,
+and no frame where two differently-generated halves have to be made to meet.
+Everything downstream (coastal erosion, the spike cleanup, the lake flood) is a
+pure function of position built on those fields, so it inherits the wrap for
+free. `DefaultWorldGenerator` does it with two ideas:
+
+- **Sample in the world's own frame.** Noise is evaluated at `(u, v)` rather than
+  at `(x, y)`. The u/v axes are √2 longer per tile, so each field's frequency
+  carries a `1/√2` factor to come out the size it was authored at.
+- **Fit the lattice to the circumference.** Perlin noise is periodic if the
+  integer lattice indices are folded into a period before lookup
+  (`PerlinNoise.Sample(x, y, periodX)`), so every field's frequency is nudged to
+  the nearest one fitting a **whole number** of noise cells around the world.
+  At these frequencies that costs a fraction of a percent of the intended
+  wavelength. Each fBm octave doubles the frequency and therefore the period,
+  which stays whole — so a fractional lacunarity turns the wrap off rather than
+  quietly leaving a seam.
+
+The per-tile *hashes* cannot close on themselves that way, so anything using one
+(where each tree stands within its tile) hashes `WorldBounds.Canonical` — the
+position with its u folded back into the first lap — instead of the raw one.
+
+**Past a pole** the generator still works the tile out in full but marks it
+`IsVoid`: the last row of ground inside the world has to be shaped and lit
+against genuine neighbours, not against a wall of nothing. It is simply never
+drawn, nothing may walk onto it, and the cloud sheet is cut to the band (the
+poles are lines of constant `v`, so in iso space they are two horizontal lines
+and the crop is a clip on the overlay quad). The backdrop is cleared to **black**
+rather than the sky colour, so what shows past a pole is nothing at all.
+`StreamChunks` skips chunks lying more than one chunk beyond a pole, and the
+camera's `v` is clamped to the band so it cannot be driven off the map and lost
+in the black. `u` is never clamped — there is nothing to clamp it to.
 
 ## Climate model
 
-`DefaultWorldGenerator` evaluates three independent seeded Perlin fBm fields over
-infinite space, then couples them the way a real climate does:
+The planet is banded by **latitude**, the way the real one is. `WorldBounds`
+gives every tile a latitude from its `v` — 0 on the equator, 1 at either pole —
+and the climate is built from a zonal profile at that latitude plus a *regional
+anomaly* on top of it.
 
 1. **Height** — fractal noise, reshaped for relief (broad oceans/lowlands, peaks
    that rise to bare rock), then quantized into discrete elevation steps.
-2. **Temperature** — a broad base field, **then cooled by altitude** (a lapse
-   rate): `temperature = base − max(0, height − seaLevel) × lapse`. Mountains are
-   cold even in warm latitudes.
-3. **Moisture** — its own field; ground near the water table reads damper, fading
-   out with height rather than stepping at the shoreline (a flat below-sea-level
-   bonus used to put a hard wet/dry edge along every coast).
+2. **Temperature** — Earth's own annual zonal mean, pinned every 20° and
+   normalized (`TempProfile`: 1.00 · 0.97 · 0.75 · 0.44 · 0.12 · 0.00), then
+   **cooled by altitude** (a lapse rate):
+   `temperature = zonal + anomaly − max(0, height − seaLevel) × lapse`.
+   Flat across the tropics, where the sun is nearly overhead all year and 10°
+   north of the equator is no cooler than the equator itself; a long, steady fall
+   through the mid-latitudes; and **still falling at the pole**. That last part
+   matters: a profile that flattens into the cap (a raised cosine, say) stops
+   saying anything over the last stretch of the map, the anomaly takes over, and
+   the world reads as *warming up again* as you reach the top of it.
+3. **Moisture** — the circulation cells that put Earth's deserts where they are:
+   air rises wet over the equator, comes down dry over the subtropics — the belt
+   nearly every great desert on Earth sits in — rises again along the mid-latitude
+   storm track, and the poles, being cold, are deserts too. So the map bands:
+   rainforest on the equator, a ring of desert either side of it, then temperate
+   forest, then tundra. Ground near the water table then reads damper, fading out
+   with height rather than stepping at the shoreline.
 
-**Climate changes gradually, by construction.** Hot must never border cold, nor wet
-border dry, so the climate fields are the slowest-moving thing on the map: low
-frequency (0.0035 / 0.0030) and only two octaves, since every extra octave adds
-wiggle that reads as one tile being warmer than the one beside it. Measured over a
-million tiles, a neighbouring pair differs by 0.0035 temperature and 0.0055
-moisture on average — a full sweep from freezing to hot takes about **290 tiles**,
-dry to soaked about **180**.
+The **anomaly** is what stops those bands reading as stripes painted across the
+map: an independent fBm field, weighted well under half (0.42 / 0.40), so
+latitude always wins — no amount of local warmth makes a pole temperate — while a
+region can still run a good way warmer or wetter than its neighbours at the same
+latitude. It is **damped over the cap** (`PolarCalm`), where the zonal profile is
+shallower again, so nothing local can put a warm region nearer the pole than a
+cold one. The pole is the coldest ground on the map wherever you stand on it,
+which is what an ice cap is.
 
-This frequency is set against `Spread` below, which multiplies the field's spatial
-gradient about fourfold. That is the unavoidable price of an even distribution: the
-mapping has to be steep to stretch a narrow bell across 0..1, so the raw field must
-be correspondingly slow for transitions to stay wide.
+**The climate fields scale with the world.** They are sized as a fraction *of the
+planet* (`TemperatureCells` / `MoistureCells` — so many noise cells all the way
+round) rather than as a wavelength in tiles, so a tiny world gets the same handful
+of warm and cool regions around it that a huge one does, instead of one climate
+covering the lot. The terrain fields are the other way about: a mountain range is
+the size a mountain range is whatever the planet's size, so those keep an absolute
+scale and a big world simply has more of them.
 
-Both climate fields are then **spread** through a logistic CDF. This matters more
-than it sounds: fBm sums octaves, so its raw output is near-Gaussian and bunched
-around 0.5 — measured over land it spanned barely 0.40–0.69. The hot and dry
-corners of the diagram were simply unreachable, so grassland generated at *0% of
-tiles* and 63% of land was forest. `Spread` (sigma matched to the field's measured
-deviation) stretches each field evenly across 0..1, which is what makes deserts,
-savanna and open grassland exist at all.
+Climate still changes **gradually, by construction** — hot must never border cold,
+nor wet border dry. Only two octaves on the anomaly, since every extra octave adds
+wiggle that reads as one tile being warmer than the one beside it, and the zonal
+profile itself moves over a quarter of the planet.
+
+The anomaly is **spread** through a logistic CDF before it is added. This matters
+more than it sounds: fBm sums octaves, so its raw output is near-Gaussian and
+bunched around 0.5 — measured over land it spanned barely 0.40–0.69. Regional
+variation would have been all middling, never reaching the warm and dry ends that
+make deserts, savanna and open grassland exist at all. `Spread` (sigma matched to
+the field's measured deviation) stretches it evenly across 0..1.
 
 The lapse rate is deliberately gentle (0.25). At 0.9 the altitude cooling was an
 order of magnitude larger than the temperature field's own variation, so height
@@ -98,11 +177,12 @@ puts snow on it.
 
 ### The world dials
 
-`WorldSettings` holds three knobs for the world as a whole, all set from the
+`WorldSettings` holds four knobs for the world as a whole, all set from the
 settings panel:
 
 | Dial | Bands | What it moves |
 | --- | --- | --- |
+| **World size** | `TINY · SMALL · MEDIUM · LARGE · HUGE` | how big the planet is |
 | **Temperature** | `ICY · COLD · TEMPERATE · WARM · HOT` | how warm the whole map runs |
 | **Rainfall** | `ARID · DRY · MODERATE · WET · LUSH` | how wet the whole map runs |
 | **Planet age** | `YOUNG · YOUTHFUL · MATURE · OLD · ANCIENT` | how hilly it is — how far erosion has got |
@@ -112,14 +192,24 @@ the *kind* of world a given seed comes back as. Thin savanna over sand at
 `HOT · ARID`; snow-laden taiga from coast to skyline at `ICY · LUSH`; cold high
 tundra at `YOUNG` where `ANCIENT` gives rolling green lowland, off the same seed.
 
-Each band shifts the **raw noise** by 0.05 — half the field's own standard
-deviation — *before* `Spread` stretches it across 0..1. Biasing the finished field
-instead would have to clamp, and clamping flattens one end of the map to a single
-value: a hot world where a third of the land reads exactly 1.0 and every
-temperature difference within it has been squashed out. Going in ahead of the
-logistic slides the whole distribution instead — at the extreme bands the typical
-tile sits around 0.15 or 0.85, and the map keeps its warmer and cooler country
-throughout.
+**Size** is the span from pole to pole — 256 · 512 · 1024 · 2048 · 4096 tiles, so
+65k tiles at the bottom and 17M at the top, each band quadrupling the ground.
+Powers of two and whole numbers, because the east–west wrap is the lattice move
+`(x, y) → (x + Span, y − Span)` and has to land on the grid for the two sides to
+meet. Every field's frequency is cut to fit the circumference, so changing size
+re-fits them all (`DefaultWorldGenerator.Fit`) and the camera is put back on the
+equator — a planet of a different size is a different planet, and the old position
+means nothing on it.
+
+**Temperature and rainfall slide the ends of their zonal profile** rather than
+offsetting the finished field: a hot world gets a hotter equator *and* milder
+poles, a cold one freezes the poles and cools the tropics. Offsetting the finished
+field would have to clamp, and clamping flattens one end of the map to a single
+value — a hot world where a third of the land reads exactly 1.0 and every
+temperature difference within it has been squashed out. Moving the profile keeps
+the whole spread of climates on the map. The profile ends deliberately sit outside
+0..1 (a pole aiming below zero is what makes a genuine ice cap: ground at the
+floor no matter which way the anomaly went).
 
 Everything downstream follows for free, because it all reads the same fields:
 biomes reclassify, vegetation follows the biome, and snow — which is weather, not a
@@ -170,6 +260,32 @@ lands roughly 33% of land in grass and 26% in trees.
 Tune the thresholds in `BiomeClassifier`, and the sea/beach/rock lines in
 `WorldConstants`.
 
+**A lake is a size of water, not a kind of it.** Deep or shallow is a matter of how
+far down the bed is, and one tile can answer that. Lake or sea is a matter of how
+much water there is, and no tile can: a tile in the middle of a lake looks exactly
+like a tile in the middle of an ocean. So `LakeFinder` measures the body instead —
+it floods the water outward from the tile through the generator's own height field
+and sees whether the whole thing closes inside `MaxLakeArea` (500 tiles). If it
+does, every tile of it is `Biome.Lake`; if the flood runs past the cap, it is sea.
+An inland sea is still a sea.
+
+This is the one thing in generation that is not a pure function of a position, and
+two properties keep it honest. It is **order-independent**: whichever of a body's
+tiles is asked first, the body is the same size, so a lake is a lake whether you
+arrive from the north or the south, and whether or not the rest of it is loaded.
+And it is **paid once per body, not per tile**: every tile a flood touches is filed
+with the body's verdict, and a flood that reaches a filed tile stops and takes its
+answer — so the first tile of an ocean costs a 500-tile flood and the rest of that
+ocean costs a dictionary lookup. Chunk generation measures ~40% slower over water
+because of it. The cache is dropped when it grows past a cap (the map is endless,
+the camera comes back) and on `World.Regenerate` through `IWorldGenerator.Reset`,
+where the ground itself is about to change; losing it costs work, never
+correctness.
+
+Lakes wear the shallow-water tile rather than the deep blue, and no surf breaks on
+them — `CollectShore` gates on `Tile.IsSea`, so a lake's edge is still water meeting
+the bank. Everything else about water keys off `Tile.IsWater`, which counts them.
+
 **Grass is coloured from climate, not from a swatch.** `BiomeRegistry.SurfaceColor`
 gives grassland and savanna a colour along a single green-to-yellow ramp: water
 drives it green, drought and heat bleach it back to yellow. It never leaves that
@@ -219,10 +335,44 @@ That is what puts the odd lone tree out on open grassland, where the count used 
 be a hard switch that left half the grassland bare and made a forest of the rest.
 
 **Trees and bushes are painted art**, from `Assets/trees.png`. A `VegItem` carries a
-seed, and the draw picks which of the sheet's variants that plant gets, so a wood is a
-mix rather than one tree stamped over and over. Grass, cactus and rocks are still drawn
-in code — the sheet carries no art for them — and jungles borrow the broadleaves if it
-holds no palms.
+seed, and the draw picks which of the sheet's variants that plant gets. Grass, cactus
+and rocks are still drawn in code — the sheet carries no art for them — and jungles
+borrow the broadleaves if it holds no palms.
+
+### Forests have a species
+
+The biome decides how many trees; it does not decide which. That is the **wood** the
+tile stands in (`Forests`), because a real forest is not an even mix of everything
+that will grow there: one species takes the light and the rest live under it, which
+is why a pine wood a mile from an oak wood looks nothing like it.
+
+A low-frequency **stand field** gives every wooded tile a `ForestKind` — `Conifer`,
+`ConiferMixed`, `BroadleafMixed`, `Broadleaf`, `Palm`, `PalmMixed`. Each names its
+primary tree and carries that tree's share of the canopy: a pure stand is ~88% its
+own tree, a mixed one ~60/40. A pure stand keeps a tenth for the other kind rather
+than none at all — a wood with literally one species in it reads as wallpaper, and
+the odd stranger in the ranks is what makes the dominance look chosen. `AddTrees`
+then splits the tile's whole tree budget between the two by share, so the proportion
+holds however thickly the tile is planted.
+
+The one climate coupling is that **cold favours evergreens**: temperature tilts the
+stand field about a pivot in the middle of the temperate band. That puts evergreen
+country where a player expects it without pinning it to the taiga — a temperate
+forest is perfectly free to be a pine wood. Measured over a 512² map: taiga comes
+out 82% evergreen stands, temperate forest splits 46% broadleaf / 31% evergreen /
+23% mixed, savanna is broadleaf outright, and jungle is 65/35 palm.
+
+A wood is not only one *kind* of tree but, mostly, one **tree**. A second field (its
+own seed, so its patches cut across the kind's rather than lining up with them) picks
+one form out of that kind's art, and `Form` draws it `StandPurity` of the time. So a
+stand reads as one recognisable tree with a few others scattered through it, and
+every painted tree still gets used somewhere instead of the sheet's first few taking
+every pure stand on the map. Standing deadwood is bare either way, and is rolled at
+random.
+
+Stands run ~28 tiles across on average and their species patches ~19, so you walk
+through one wood for a while before it changes. Both are tuned by `StandScale` /
+`SpeciesScale`. Mouse over a tile to read its wood in the HUD.
 
 **One sheet carries every plant.** The bushes used to come off a second sheet of their
 own; they now come off the lower rows of the tree sheet like everything else, so there
@@ -563,7 +713,7 @@ and mirrored by flipping its UVs when a mob walks the other way.
 | Arrow keys / WASD | Pan the camera — or, with the panel open, walk it |
 | Mouse drag / touch drag | Pan the camera |
 | Mouse wheel | Zoom in / out (0.4× to 16×) |
-| Mouse over a tile | Read its coordinates, biome and climate in the HUD |
+| Mouse over a tile | Read its coordinates, latitude, biome and climate in the HUD |
 | Click a mob | Select it — its vitals go up on the HUD; click bare ground to clear |
 | G | Toggle the tile-grid overlay |
 | B | Toggle the depth-tested foliage/mob path (prototype — see below) |
@@ -577,7 +727,7 @@ and mirrored by flipping its UVs when a mob walks the other way.
 ### The settings panel
 
 `SettingsMenu` gathers the world's knobs — the time of day, the clock, the day length,
-the world dials (climate and age), the map view, the tile size, the zoom, the grid —
+the world dials (size, climate and age), the map view, the tile size, the zoom, the grid —
 somewhere they can be found, instead of each one living on a key you have to know about. TAB opens it; UP/DOWN walk it,
 LEFT/RIGHT change the selected setting (held, for the ones with a long range), ENTER
 acts on it, and rows can be clicked.

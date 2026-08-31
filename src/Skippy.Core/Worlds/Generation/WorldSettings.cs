@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 
 namespace Skippy.Core.Worlds.Generation;
 
@@ -37,10 +37,23 @@ public enum PlanetAge : byte
 }
 
 /// <summary>
-/// The dials the whole world is generated from: how warm it runs, how wet it runs, and how
-/// old â€” and so how worn down â€” it is. Each is a band either side of a neutral middle, and
-/// each moves the entire map rather than adding a feature to it, so what changes is the
-/// *kind* of world the same seed comes back as.
+/// How big the planet is. Each band doubles the distance from pole to pole, and so
+/// quadruples the amount of ground — see <see cref="WorldSettings.Span"/>.
+/// </summary>
+public enum WorldSize : byte
+{
+    Tiny,
+    Small,
+    Medium,
+    Large,
+    Huge,
+}
+
+/// <summary>
+/// The dials the whole world is generated from: how big it is, how warm it runs, how wet
+/// it runs, and how old — and so how worn down — it is. Each is a band either side of a
+/// neutral middle, and each moves the entire map rather than adding a feature to it, so
+/// what changes is the *kind* of world the same seed comes back as.
 ///
 /// They are read live by <see cref="DefaultWorldGenerator"/>, which holds this very object:
 /// turn a dial, call <see cref="World.Regenerate"/>, and the next chunk built uses it.
@@ -50,31 +63,49 @@ public sealed class WorldSettings
     /// <summary>The band each dial sits at; <see cref="Middle"/> is the neutral one.</summary>
     private const int Middle = 2, Bands = 5;
 
-    // ---- climate --------------------------------------------------------------
+    // ---- size -----------------------------------------------------------------
+
+    public WorldSize Size { get; set; } = WorldSize.Medium;
 
     /// <summary>
-    /// How far one band shifts the raw climate noise. The noise has a standard deviation of
-    /// <see cref="DefaultWorldGenerator.ClimateSigma"/>, so half of that per band moves the
-    /// *typical* tile a good way up the scale without any band being so far out that the map
-    /// loses its variety: at the ends the median tile sits around 0.15 or 0.85.
+    /// Tiles from pole to pole. The world is a band that wraps east–west (see
+    /// <see cref="WorldBounds"/>), so this one number fixes the whole planet: it is half
+    /// the circumference, and the map holds span² tiles all told.
     ///
-    /// The bias goes onto the *raw* noise, before it is spread out into a 0..1 field, not
-    /// onto the finished field. Biasing the finished field and clamping would flatten one
-    /// end of the map to a single value â€” a hot world where a third of the land reads
-    /// exactly 1.0 and every temperature difference in it has been squashed out. Going in
-    /// before the logistic slides the whole distribution instead: the map keeps its warm and
-    /// cool country, and the whole of it is warmer.
+    /// Powers of two, and whole numbers, because the wrap is the tile-space move
+    /// (x, y) → (x + span, y − span): it has to land on the lattice or the two sides
+    /// could not meet.
     /// </summary>
-    private const float ClimateBandStep = 0.05f;
+    public int Span => Spans[(int)Size];
+
+    /// <summary>Tiles all the way round, east to east. Twice the span.</summary>
+    public int Circumference => Span * 2;
+
+    /// <summary>Tiny to huge. About 65k tiles at the bottom and 17M at the top.</summary>
+    private static readonly int[] Spans = { 256, 512, 1024, 2048, 4096 };
+
+    /// <summary>The world's shape, for anything that needs to know where its edges are.</summary>
+    public WorldBounds Bounds => new(Span);
+
+    // ---- climate --------------------------------------------------------------
 
     public WorldTemperature Temperature { get; set; } = WorldTemperature.Temperate;
     public WorldRainfall Rainfall { get; set; } = WorldRainfall.Moderate;
 
-    /// <summary>Shift added to the raw temperature noise; negative is colder.</summary>
-    public float TemperatureBias => ((int)Temperature - Middle) * ClimateBandStep;
+    /// <summary>
+    /// Where the temperature dial sits, 0 (icy) to 1 (hot), with the neutral band at 0.5.
+    ///
+    /// The generator uses this to slide the *ends* of its pole-to-equator temperature
+    /// profile rather than to offset the finished field: a hot world has a hotter equator
+    /// and milder poles, a cold one freezes the poles and cools the tropics. Shifting the
+    /// profile keeps the whole spread of climates on the map, where adding an offset and
+    /// clamping would flatten one end of it — a hot world where a third of the land reads
+    /// exactly 1.0 and every temperature difference in it has been squashed out.
+    /// </summary>
+    public float Warmth => (int)Temperature / (float)(Bands - 1);
 
-    /// <summary>Shift added to the raw moisture noise; negative is drier.</summary>
-    public float MoistureBias => ((int)Rainfall - Middle) * ClimateBandStep;
+    /// <summary>Where the rainfall dial sits, 0 (arid) to 1 (lush). As <see cref="Warmth"/>.</summary>
+    public float Wetness => (int)Rainfall / (float)(Bands - 1);
 
     // ---- age ------------------------------------------------------------------
 
@@ -82,7 +113,7 @@ public sealed class WorldSettings
 
     /// <summary>
     /// The exponent land height is raised to, as a fraction of the way from sea level to the
-    /// highest ground. Above 1 it pulls the middle of that range down towards the sea â€”
+    /// highest ground. Above 1 it pulls the middle of that range down towards the sea —
     /// hills become plains and mountains become hills, which is erosion's whole effect on a
     /// map; below 1 it pushes it up, so ground that would have been a slope stands as
     /// highland.
@@ -97,7 +128,7 @@ public sealed class WorldSettings
     /// <summary>How hard mountain ranges are pushed up, as a multiple of the authored uplift.</summary>
     public float MountainUplift => MountainUplifts[(int)Age];
 
-    /// <summary>Young to ancient. The middle band is 1 â€” the terrain exactly as authored.</summary>
+    /// <summary>Young to ancient. The middle band is 1 — the terrain exactly as authored.</summary>
     private static readonly float[] ReliefGammas = { 0.68f, 0.85f, 1.00f, 1.35f, 1.85f };
 
     /// <summary>
@@ -119,13 +150,14 @@ public sealed class WorldSettings
     public void StepAge(int direction)
         => Age = (PlanetAge)Step((int)Age, direction);
 
-    /// <summary>The band names, for the settings panel's 3Ã—5 font (which has no lower case).</summary>
+    public void StepSize(int direction)
+        => Size = (WorldSize)Step((int)Size, direction);
+
+    /// <summary>The band names, for the settings panel's 3×5 font (which has no lower case).</summary>
     public string TemperatureName => Temperature.ToString().ToUpperInvariant();
     public string RainfallName => Rainfall.ToString().ToUpperInvariant();
     public string AgeName => Age.ToString().ToUpperInvariant();
+    public string SizeName => Size.ToString().ToUpperInvariant();
 
     private static int Step(int band, int direction) => Math.Clamp(band + Math.Sign(direction), 0, Bands - 1);
 }
-
-
-
