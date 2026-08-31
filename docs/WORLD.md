@@ -324,7 +324,7 @@ Each tile carries a low-frequency **vegetation-density** field (its clumping
 value). At render time this drives an **Age-of-Empires-II-style scatter**: a tile
 places *many* individual plants (up to ~12) at randomized, deterministic
 positions within its quad — dense broadleaf/pine forests, scattered savanna
-trees, desert cactus, tundra shrubs — rather than one sprite per tile. Species
+trees, tundra shrubs, scattered stone — rather than one sprite per tile. Species
 come from the biome; water and beaches stay clear. (`VegetationPicker` still
 computes a single representative type per tile, handy for gameplay queries.)
 
@@ -335,7 +335,7 @@ That is what puts the odd lone tree out on open grassland, where the count used 
 be a hard switch that left half the grassland bare and made a forest of the rest.
 
 **Trees and bushes are painted art**, from `Assets/trees.png`. A `VegItem` carries a
-seed, and the draw picks which of the sheet's variants that plant gets. Grass, cactus
+seed, and the draw picks which of the sheet's variants that plant gets. Grass
 and rocks are still drawn in code — the sheet carries no art for them — and jungles
 borrow the broadleaves if it holds no palms.
 

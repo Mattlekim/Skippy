@@ -97,7 +97,6 @@ public enum Vegetation : byte
     PineTree,
     BroadleafTree,
     PalmTree,
-    Cactus,
     Rock,
 }
 

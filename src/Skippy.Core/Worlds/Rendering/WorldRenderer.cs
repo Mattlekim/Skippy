@@ -216,8 +216,13 @@ public sealed class WorldRenderer : IDisposable
 
     /// <summary>Base tints for what is still drawn in code (see <see cref="Vary"/>).</summary>
     private static readonly Color GrassBlade = new(110, 150, 86);
-    private static readonly Color CactusFlesh = new(80, 124, 80);
-    private static readonly Color RockStone = new(120, 116, 112);
+    private static readonly Color RockStone = new(132, 128, 122);
+
+    /// <summary>
+    /// How far a rock facet's lighting normal is leaned toward straight up, 0 = its own
+    /// normal, 1 = flat sky-facing. See <see cref="RockFace"/>.
+    /// </summary>
+    private const float SkyTilt = 0.5f;
 
     /// <summary>Surf, premultiplied: bright on the waterline, faint on the swell behind.</summary>
     private static readonly Color FoamNear = Color.White * 0.7f;
@@ -2363,8 +2368,8 @@ public sealed class WorldRenderer : IDisposable
                 if (rng.Next() > 0.92f) Add(Vegetation.Bush, 1, deadChance: 1f);
                 Add(Vegetation.Rock, RockRateTundra);
                 break;
-            // Desert stays bare stone-wise: shifting sand carries no scattered rock.
-            case Biome.Desert: if (dens > 0.7f) Add(Vegetation.Cactus, dens > 0.88f ? 2 : 1); break;
+            // Desert grows nothing at all: shifting sand carries no scattered rock, and
+            // dune country is bare sand rather than the cartoon cactus flat.
             // The mountains are made of the stuff: rock thickly over the bare peaks.
             case Biome.Rock: Add(Vegetation.Rock, RockRateMountain); break;
         }
@@ -2433,15 +2438,14 @@ public sealed class WorldRenderer : IDisposable
         Vegetation.BroadleafTree or Vegetation.PalmTree or Vegetation.PineTree
             => TreeHeight * 0.30f * item.Scale,
         Vegetation.Bush => BushHeight * 0.42f * item.Scale,
-        Vegetation.Cactus => 4.5f * item.Scale,
         Vegetation.Rock => 6f * item.Scale,
         _ => 0f, // grass tufts are too slight to cast one
     };
 
     /// <summary>
     /// The unit a plant's shadow is drawn out in, in iso pixels: its own radius, tuned by
-    /// how top-heavy the caster is. A squat rock's shadow barely leaves its foot; a cactus
-    /// is all height over a small footprint, so its lean is the most pronounced.
+    /// how top-heavy the caster is. A squat rock's shadow barely leaves its foot; a tree,
+    /// all crown over a thin trunk, throws its the furthest.
     ///
     /// It is deliberately measured against the shadow rather than the plant's height. Off
     /// height alone a tree wrote thirty-odd pixels here, and once <see cref="ShadowReachMax"/>
@@ -2451,13 +2455,17 @@ public sealed class WorldRenderer : IDisposable
     /// </summary>
     private static float ShadowLean(in VegItem item, float radius) => radius * (item.Veg switch
     {
-        Vegetation.Cactus => MaxLeanFactor,
         Vegetation.Rock => 0.45f,
         Vegetation.Bush => 0.70f,
         _ => 1f, // trees
     });
 
-    /// <summary>The largest <see cref="ShadowLean"/> multiplier any plant uses.</summary>
+    /// <summary>
+    /// The largest <see cref="ShadowLean"/> multiplier any plant uses. It only pads the
+    /// culling bounds, so erring high costs nothing but a slightly generous margin — which
+    /// is why it is left where the cactus (the old top-heavy extreme) put it rather than
+    /// cut back to the trees' 1.
+    /// </summary>
     private const float MaxLeanFactor = 1.30f;
 
     /// <summary>
@@ -2873,7 +2881,6 @@ public sealed class WorldRenderer : IDisposable
                 Tree(at, s, item, _atlas.Palms, TreeHeight * PalmHeight, ref rng);
                 break;
 
-            case Vegetation.Cactus: Cactus(at, s, ref rng); break;
             case Vegetation.Rock: Rock(at, s, ref rng); break;
         }
     }
@@ -2987,21 +2994,6 @@ public sealed class WorldRenderer : IDisposable
         }
     }
 
-    private void Cactus(Vector2 at, float s, ref XorShift rng)
-    {
-        Color flesh = Vary(CactusFlesh, ref rng, 0.10f);
-        float h = (11f + 4f * rng.Next()) * s;
-        _builder.Sprite(at - new Vector2(0f, h * 0.5f), new Vector2(5f * s, h), BottomCenter, _atlas.Disc, flesh);
-
-        int arms = rng.Range(1, 2);
-        for (int i = 0; i < arms; i++)
-        {
-            float dir = i == 0 ? -1f : 1f;
-            float armY = h * (0.55f + 0.25f * rng.Next());
-            Disc(at + new Vector2(dir * 3f * s, -armY), (3.5f + 1.5f * rng.Next()) * s, Scale(flesh, 0.94f));
-        }
-    }
-
     /// <summary>
     /// A rock, built as real low-poly geometry rather than a flat sprite: a ragged ring of
     /// points on the ground drawn up to an off-centre summit, so it stands as a faceted
@@ -3019,9 +3011,15 @@ public sealed class WorldRenderer : IDisposable
     {
         Color stone = Vary(RockStone, ref rng, 0.08f);
 
-        int sides = rng.Range(5, 7);
-        // Most rocks are low cobbles; roughly one in seven is a big boulder.
-        float size = (rng.Next() > 0.86f ? 9f + 5f * rng.Next() : 4.5f + 3.5f * rng.Next()) * s;
+        // The size classes. Most of what is underfoot is small — a scree slope is chips and
+        // gravel with the odd stone standing out of it, not a field of matched cobbles — so
+        // the small end is the common case and the boulders are the rarity they should be.
+        float roll = rng.Next();
+        float size = (roll > 0.93f ? 9f + 5f * rng.Next()       // a big craggy boulder
+                    : roll > 0.55f ? 4.5f + 3.5f * rng.Next()   // a cobble
+                                   : 1.1f + 2.0f * rng.Next())  // a chip of stone
+                   * s;
+
         float height = size * (0.7f + 0.5f * rng.Next());
 
         // The summit, leaned off-centre so the rock is lopsided rather than a neat cone.
@@ -3029,19 +3027,61 @@ public sealed class WorldRenderer : IDisposable
         float leanR = size * 0.30f * rng.Next();
         var apex = new Vector3(MathF.Cos(leanAng) * leanR, height, MathF.Sin(leanAng) * leanR);
 
-        // The ragged base ring, sitting on the ground (up = 0).
-        Span<Vector3> ring = stackalloc Vector3[sides];
+        int sides = rng.Range(5, 7);
         float a0 = rng.Next() * MathF.PI * 2f;
+
+        // The ragged base ring, sitting on the ground (up = 0).
+        Span<Vector3> baseRing = stackalloc Vector3[sides];
+        Span<Vector3> shoulder = stackalloc Vector3[sides];
         for (int i = 0; i < sides; i++)
         {
             float ang = a0 + i / (float)sides * MathF.PI * 2f;
             float r = size * (0.72f + 0.5f * rng.Next());
-            ring[i] = new Vector3(MathF.Cos(ang) * r, 0f, MathF.Sin(ang) * r);
+            baseRing[i] = new Vector3(MathF.Cos(ang) * r, 0f, MathF.Sin(ang) * r);
         }
 
-        // One flat-shaded facet per side, its base edge drawn up to the summit.
+        // A chip of stone is a few pixels across; a second tier of facets on it would be
+        // detail nobody can see, on the size class there are most of. So the small ones
+        // stay a simple faceted cone and the detail is spent where it shows.
+        bool tiered = size > 3.5f * s;
+
+        if (!tiered)
+        {
+            for (int i = 0; i < sides; i++)
+                RockFace(at, stone, baseRing[i], baseRing[(i + 1) % sides], apex);
+            return;
+        }
+
+        // A shoulder ring partway up, pulled in towards the summit and given its own
+        // per-corner wobble in both radius and height. That is what turns the cone into a
+        // boulder: the silhouette now breaks partway up instead of running dead straight
+        // from footprint to summit, and every corner sits at its own height, so the profile
+        // is as ragged as the plan and each facet catches the sun at its own angle.
+        float shoulderUp = 0.42f + 0.22f * rng.Next();
         for (int i = 0; i < sides; i++)
-            RockFace(at, stone, ring[i], ring[(i + 1) % sides], apex);
+        {
+            float t = shoulderUp * (0.78f + 0.44f * rng.Next());
+            Vector3 b = baseRing[i];
+            float pull = 0.55f + 0.30f * rng.Next();   // how far in towards the axis it sits
+            shoulder[i] = new Vector3(
+                b.X * pull + apex.X * (1f - pull),
+                height * t,
+                b.Z * pull + apex.Z * (1f - pull));
+        }
+
+        for (int i = 0; i < sides; i++)
+        {
+            int j = (i + 1) % sides;
+
+            // The flank, as two triangles rather than a quad: their shared diagonal makes a
+            // crease down the face, and each half takes its own normal, so the flank breaks
+            // the light instead of reading as one flat panel.
+            RockFace(at, stone, baseRing[i], baseRing[j], shoulder[i]);
+            RockFace(at, stone, baseRing[j], shoulder[j], shoulder[i]);
+
+            // ...and the crown above it.
+            RockFace(at, stone, shoulder[i], shoulder[j], apex);
+        }
     }
 
     /// <summary>
@@ -3061,13 +3101,24 @@ public sealed class WorldRenderer : IDisposable
         if (nrm.Y < 0f)
             nrm = -nrm;
 
-        float shade = 0.68f + 0.32f * Math.Clamp(nrm.Y, 0f, 1f);
+        // The shading keeps the *true* normal's tilt, so the facets still read apart from
+        // one another in the flat-lit depth path where the sun never reaches them.
+        float shade = 0.72f + 0.28f * Math.Clamp(nrm.Y, 0f, 1f);
         Color c = Scale(stone, shade);
+
+        // ...but the normal handed to the sun is leaned toward the sky. The ambient fill is
+        // only about a third of full daylight, so a near-vertical facet lit off its true
+        // normal collects almost nothing and comes out near-black — which is what a stone
+        // on snow looked like once the flanks were tiered and most facets became steep. A
+        // small rock stands under an open sky and its sides do see most of it, so leaning
+        // the normal up is closer to the truth as well as far better-looking: the sides
+        // land in the greys where stone belongs, and the tops still take the full sun.
+        Vector3 litNormal = Vector3.Normalize(Vector3.Lerp(nrm, Vector3.Up, SkyTilt));
 
         Vector2 s0 = at + Iso.ObjectOffset(p0.X, p0.Y, p0.Z);
         Vector2 s1 = at + Iso.ObjectOffset(p1.X, p1.Y, p1.Z);
         Vector2 s2 = at + Iso.ObjectOffset(p2.X, p2.Y, p2.Z);
-        _builder.Triangle(s0, c, nrm, s1, c, nrm, s2, c, nrm, _atlas.White.CenterUv);
+        _builder.Triangle(s0, c, litNormal, s1, c, litNormal, s2, c, litNormal, _atlas.White.CenterUv);
     }
 
     // ---- sprite helpers (all append to the current chunk mesh) --------------

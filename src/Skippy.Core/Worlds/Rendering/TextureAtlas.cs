@@ -14,7 +14,7 @@ namespace Skippy.Core.Worlds.Rendering;
 /// It is assembled at runtime from two sources:
 ///
 ///   • A few procedural shapes (a solid block, a disc) generated in code, which the
-///     terrain, surf, grass, cactus and rocks are drawn from — and, painted the same
+///     terrain, surf, grass and rocks are drawn from — and, painted the same
 ///     way, the animals that walk about on it (see <see cref="SheepArt"/>).
 ///   • The painted sprite sheets in <c>Assets/</c>, which are cut up into individual
 ///     plants and packed in alongside them.

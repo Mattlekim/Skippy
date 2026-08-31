@@ -34,7 +34,7 @@ public static class VegetationPicker
             Biome.Jungle          => d > 0.42f ? tree : r > 0.55f ? Vegetation.Bush : Vegetation.GrassTuft,
             Biome.Grassland       => d > 0.82f ? tree : r > 0.50f ? Vegetation.GrassTuft : Vegetation.None,
             Biome.Savanna         => d > 0.86f ? tree : r > 0.60f ? Vegetation.GrassTuft : Vegetation.None,
-            Biome.Desert          => d > 0.93f ? Vegetation.Cactus : Vegetation.None,
+            // Desert grows nothing: bare, shifting sand.
             Biome.Tundra          => r > 0.90f ? Vegetation.Bush   : Vegetation.None,
             Biome.Swamp           => d > 0.60f ? Vegetation.Bush   : r > 0.60f ? Vegetation.GrassTuft : Vegetation.None,
             Biome.Rock            => r > 0.85f ? Vegetation.Rock   : Vegetation.None,
