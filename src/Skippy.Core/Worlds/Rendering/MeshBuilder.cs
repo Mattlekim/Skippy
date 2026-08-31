@@ -102,6 +102,46 @@ public sealed class MeshBuilder
     }
 
     /// <summary>
+    /// A sprite that leans with the sun: the same quad as <see cref="Sprite"/>, but with
+    /// <paramref name="lean"/> written into the vertex's otherwise unused z.
+    ///
+    /// Nothing else in the mesh uses z — everything is drawn flat — so the renderer can put
+    /// a shear in the world matrix that turns z into an offset across the ground and moves
+    /// *only* these vertices. That is what lets a plant's shadow swing round its foot as
+    /// the sun crosses the sky without a single vertex being rebuilt; see
+    /// <c>WorldRenderer.SunShear</c>. The shear flattens z back to 0 on the way through, so
+    /// these vertices still land in the orthographic projection's depth range.
+    /// </summary>
+    public void ShadowSprite(Vector2 pos, Vector2 size, Vector2 origin, in TextureAtlas.Region region, Color color, float lean)
+    {
+        Vector2 tl = pos - size * origin;
+        Vector2 br = tl + size;
+        int b = Reserve(4, 6);
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, lean), color, Up, new Vector2(region.U0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, lean), color, Up, new Vector2(region.U1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, lean), color, Up, new Vector2(region.U1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, lean), color, Up, new Vector2(region.U0, region.V1));
+        _indices[_indexCount++] = (ushort)b;
+        _indices[_indexCount++] = (ushort)(b + 1);
+        _indices[_indexCount++] = (ushort)(b + 2);
+        _indices[_indexCount++] = (ushort)b;
+        _indices[_indexCount++] = (ushort)(b + 2);
+        _indices[_indexCount++] = (ushort)(b + 3);
+        Grow(tl); Grow(br);
+    }
+
+    /// <summary>
+    /// Widens the bounds this mesh reports, for geometry that moves after it is built: a
+    /// shadow swung out by a low sun still has to count as visible, or its chunk is culled
+    /// while part of it is on screen.
+    /// </summary>
+    public void PadBounds(float amount)
+    {
+        _min -= new Vector2(amount);
+        _max += new Vector2(amount);
+    }
+
+    /// <summary>
     /// A flat-capped line of <paramref name="width"/> iso pixels from <paramref name="a"/>
     /// to <paramref name="b"/>, emitted as one quad. Used by the tile-grid overlay.
     /// </summary>
@@ -126,15 +166,23 @@ public sealed class MeshBuilder
         Grow(a); Grow(b);
     }
 
+    /// <summary>
+    /// Where the next primitive will land. Recorded before each sprite is appended, so the
+    /// finished mesh can be drawn in slices and something that moves can be drawn among its
+    /// sprites — see <see cref="ChunkMesh.Slice"/>.
+    /// </summary>
+    public ChunkMesh.Cursor Mark() => new(_segments.Count, _indexCount);
+
     /// <summary>Copies everything accumulated since <see cref="Clear"/> into GPU buffers.</summary>
-    public ChunkMesh Upload(byte neighborMask)
+    public ChunkMesh Upload(byte neighborMask, List<ChunkMesh.Slice>? slices = null)
     {
         FlushSegment();
         bool empty = _segments.Count == 0;
         var mesh = new ChunkMesh(new List<ChunkMesh.Segment>(_segments),
                                  empty ? Vector2.Zero : _min,
                                  empty ? Vector2.Zero : _max,
-                                 neighborMask);
+                                 neighborMask,
+                                 slices is null ? null : new List<ChunkMesh.Slice>(slices));
         _segments.Clear(); // ownership of the buffers has moved to the mesh
         return mesh;
     }

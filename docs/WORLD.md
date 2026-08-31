@@ -61,7 +61,7 @@ A `Tile` is a value type (`Height`, `Level`, `Temperature`, `Moisture`, `Biome`,
 infinite space, then couples them the way a real climate does:
 
 1. **Height** — fractal noise, reshaped for relief (broad oceans/lowlands, peaks
-   that rise to the snow line), then quantized into discrete elevation steps.
+   that rise to bare rock), then quantized into discrete elevation steps.
 2. **Temperature** — a broad base field, **then cooled by altitude** (a lapse
    rate): `temperature = base − max(0, height − seaLevel) × lapse`. Mountains are
    cold even in warm latitudes.
@@ -93,40 +93,69 @@ savanna and open grassland exist at all.
 The lapse rate is deliberately gentle (0.25). At 0.9 the altitude cooling was an
 order of magnitude larger than the temperature field's own variation, so height
 decided climate single-handedly and a third of all land clamped to freezing.
-Snow-capped peaks don't need it — the snow line caps high ground regardless.
+It is still what makes a peak colder than the country it stands in, and so what
+puts snow on it.
 
-### Rivers
+### The world dials
 
-A river is not a property of a tile, it is a *path*, and the map is far too large to
-run a drainage simulation over. So `RiverNetwork` traces them: springs sit on a
-coarse deterministic grid (one per 90 tiles, only on ground well above the sea), and
-each is walked downhill through the height field until it reaches water. **A river
-arrives at the ocean by construction** — it is a route there, not a shape that
-resembles one. Measured over a 3000-tile square: 414 rivers, **92.5% reaching the
-sea**, mean length 98 tiles.
+`WorldSettings` holds three knobs for the world as a whole, all set from the
+settings panel:
 
-The walk takes the lowest *unvisited* neighbour, not simply the lowest. That detail
-is the whole feature: a fractal height field is full of small pits, and plain
-steepest descent deadlocks in the first one — walking out and falling straight back
-in, carving a puddle instead of a river. Refusing to revisit means a pit is climbed
-out of by its lowest rim, which is where a real lake would spill, and the descent
-resumes on the far side.
+| Dial | Bands | What it moves |
+| --- | --- | --- |
+| **Temperature** | `ICY · COLD · TEMPERATE · WARM · HOT` | how warm the whole map runs |
+| **Rainfall** | `ARID · DRY · MODERATE · WET · LUSH` | how wet the whole map runs |
+| **Planet age** | `YOUNG · YOUTHFUL · MATURE · OLD · ANCIENT` | how hilly it is — how far erosion has got |
 
-Traces are cached per spring, so a river running through forty chunks is walked once;
-a chunk stamps in every river whose course crosses it, after the climate pass.
-`WorldConstants.RiverWidth` is the channel width in tiles and is live-tunable
-(`,` / `.`), which throws the map away and regenerates it, since channels are cut at
-generation time.
+None of them adds a biome or a rule; each slides the whole map, so what changes is
+the *kind* of world a given seed comes back as. Thin savanna over sand at
+`HOT · ARID`; snow-laden taiga from coast to skyline at `ICY · LUSH`; cold high
+tundra at `YOUNG` where `ANCIENT` gives rolling green lowland, off the same seed.
+
+Each band shifts the **raw noise** by 0.05 — half the field's own standard
+deviation — *before* `Spread` stretches it across 0..1. Biasing the finished field
+instead would have to clamp, and clamping flattens one end of the map to a single
+value: a hot world where a third of the land reads exactly 1.0 and every
+temperature difference within it has been squashed out. Going in ahead of the
+logistic slides the whole distribution instead — at the extreme bands the typical
+tile sits around 0.15 or 0.85, and the map keeps its warmer and cooler country
+throughout.
+
+Everything downstream follows for free, because it all reads the same fields:
+biomes reclassify, vegetation follows the biome, and snow — which is weather, not a
+biome — lies wherever the ground is now cold enough.
+
+**Planet age weathers the height field**, before the mountains are laid on it. Land
+height is taken as a fraction of the way from sea level to the cap and raised to a
+power: above 1 it pulls the middle of that range down towards the sea — hills become
+plains, mountains become hills, which is all erosion does to a map — and below 1 it
+pushes ground that would have been a slope up into highland. A curve on the land
+*fraction*, rather than a multiplier on the height, because it fixes both ends: sea
+level maps to itself, so the coastline stays exactly where it was and only the relief
+behind it changes, and the top of the range maps to itself, so nothing can push a
+summit past the cap and quantize it into a flat plateau. The mountain uplift is
+scaled by age on top of that, and because an old world's ground rarely climbs to the
+mountain foot at all, it grows fewer ranges as well as lower ones.
+
+That relief carries the climate with it: a young world's high ground is cold ground
+(the lapse rate), so `YOUNG` reads as tundra and snow where `ANCIENT` is temperate
+grassland — one dial, and the whole map answers.
+
+The dials are baked into a tile when it is generated, so changing one calls
+`World.Regenerate()`: the chunks are thrown away and rebuilt. That also drops the
+**renderer's** cached meshes. They are keyed by chunk coordinate and a regenerated
+world hands those same coordinates back, so without `WorldRenderer.Invalidate()`
+the old ground goes on drawing over a map that no longer exists.
 
 ### Biomes = temperature × moisture
 
 `BiomeClassifier` maps the resulting climate to a biome with a Whittaker-style
-diagram. Height overrides handle the extremes (water below sea level, rock/snow
-above the snow line); everything else is a temperature × moisture grid:
+diagram. Height overrides handle the extremes (water below sea level, bare rock
+above the rock line); everything else is a temperature × moisture grid:
 
 ```
             dry ───────────── moisture ───────────── wet
- cold │ Tundra          Taiga            Snow
+ cold │ Tundra          Taiga            Taiga
  temp │ Grassland       TemperateForest  Swamp
  warm │ Savanna         Grassland        Jungle
  hot  │ Desert          Savanna          Jungle
@@ -138,7 +167,7 @@ far a tile sits from the nearest boundary. Open country is the default and fores
 is the exception — trees are held to the wet end of each temperature band — which
 lands roughly 33% of land in grass and 26% in trees.
 
-Tune the thresholds in `BiomeClassifier`, and the sea/beach/snow lines in
+Tune the thresholds in `BiomeClassifier`, and the sea/beach/rock lines in
 `WorldConstants`.
 
 **Grass is coloured from climate, not from a swatch.** `BiomeRegistry.SurfaceColor`
@@ -146,11 +175,32 @@ gives grassland and savanna a colour along a single green-to-yellow ramp: water
 drives it green, drought and heat bleach it back to yellow. It never leaves that
 two-colour line, so big open country varies without going muddy.
 
-**Tundra wears snow in patches.** The climate fields are far too slow to make
-anything look patchy up close, so `Tile.Patch` is a separate, much higher-frequency
-field (a few tiles across) purely for surface detail. Snow lies where it peaks, and
-the colder the ground the lower the bar — the far north goes mostly white, the
-fringe stays mostly bare.
+**Tundra is pale year-round.** It wears the sheet's frost-dirt tile, washed towards
+white as the atlas is packed (`TextureAtlas.GroundWash`), so frozen ground reads cold
+from a distance well before it is cold enough for snow to lie on it. The wash is baked
+into the pixels because a vertex colour can only darken a texture — making ground
+*lighter* means changing the art.
+
+**Snow is weather, not a biome.** There is no snow biome and no snow ground texture.
+Snow lies wherever the ground is cold enough, whatever that ground is, drawn as a
+white layer over it: first flakes at 6 °C, unbroken by −1 °C. It needs moisture to
+fall at all (nothing settles on a cold desert) and breaks into drifts through a noise
+threshold, so the edge of its range is patchy rather than a line. The snow line sits
+above literal freezing because the temperature field is a yearly average: tundra
+averages a few degrees above zero and is still under snow most of the year, and a line
+pinned to 0 °C left the whole cold band nearly bare. The moisture floor is low for the
+same reason — tundra is drier than most deserts, but nothing thaws there. So tundra,
+taiga and cold high ground wear snow while the same ground in a warmer band does not,
+and a snow-capped peak comes out of the lapse rate rather than out of the classifier.
+
+**Plants are capped and rimed.** The snow on a plant is one white sprite sampling a mask
+baked from the plant's own pixels (`TextureAtlas.SnowCap`), so it can only land where the
+plant actually paints. The mask is mostly a *cap*: a pixel is snowy in proportion to how
+little of the plant lies above it, which whitens the crown and the tops of the boughs and
+leaves the undersides dark. Under that sits a floor — the *rime* that gets everywhere —
+because a cap alone left tundra scrub as a dark blob with a white fringe: it is a dense
+mass of twigs, so every pixel but the rim has something over it. A plant deep enough in
+the snow gets the sprite twice, which covers what one coat's mask could not.
 
 ### Vegetation follows climate
 
@@ -168,13 +218,17 @@ remainder is settled with a coin toss, so a rate of 0.05 holds at any tile size.
 That is what puts the odd lone tree out on open grassland, where the count used to
 be a hard switch that left half the grassland bare and made a forest of the rest.
 
-**Trees and bushes are painted art**, from the sheets in `Assets/`. A `VegItem`
-carries a seed, and the draw picks which of the sheet's variants that plant gets, so
-a wood is a mix rather than one tree stamped over and over. Grass, cactus and rocks
-are still drawn in code — the sheets carry no art for them — and jungles borrow the
-broadleaves, there being no palm on the sheets.
+**Trees and bushes are painted art**, from `Assets/trees.png`. A `VegItem` carries a
+seed, and the draw picks which of the sheet's variants that plant gets, so a wood is a
+mix rather than one tree stamped over and over. Grass, cactus and rocks are still drawn
+in code — the sheet carries no art for them — and jungles borrow the broadleaves if it
+holds no palms.
 
-**Some plants come up dead**, and the sheets have their own bare-wood art for that.
+**One sheet carries every plant.** The bushes used to come off a second sheet of their
+own; they now come off the lower rows of the tree sheet like everything else, so there
+is one file to repaint and one row convention to remember.
+
+**Some plants come up dead**, and the sheet has its own bare-wood art for that.
 Each `Add` call takes the share that should be deadwood: a few percent in healthy
 woods, more in swamp and savanna where trees drown or bake, and **always** on
 tundra, where nothing holds a leaf.
@@ -186,24 +240,36 @@ sheets, so the world still draws with a single texture bound. The sheets are
 embedded in the assembly rather than read off disk, so every head loads them the
 same way and the browser build needs no file server.
 
-Two parts of this are worth knowing, because the obvious approach fails at both:
+Three parts of this are worth knowing, because the obvious approach fails at each:
 
-- **Keying.** The sheets are painted on a flat dark card, not on transparency.
-  Thresholding on distance from the card's colour cannot work: measured off the art,
-  the card sits at luminance ~18 with almost no colour in it, while *shaded foliage
-  is darker than the card* and is only distinguishable by being coloured at all. Any
-  threshold loose enough to keep that foliage also keeps the soft glow the sheets
-  carry around each subject, leaving every plant on a visible rectangle of card; any
-  threshold tight enough to remove the glow eats the foliage. So the card is
-  **flooded** from the sheet's edges instead — only backdrop that connects to the
-  outside is removed, and shade enclosed by a plant survives however dark it is.
+- **Keying.** The sheets arrive with a backdrop rather than transparency. Thresholding
+  on distance from one backdrop colour cannot work: measured off the art, the card
+  sits at luminance ~18 with almost no colour in it, while *shaded foliage is darker
+  than the card* and is only distinguishable by being coloured at all. Any threshold
+  loose enough to keep that foliage also keeps the soft glow the sheets carry around
+  each subject, leaving every plant on a visible rectangle of card; any threshold
+  tight enough to remove the glow eats the foliage. So the backdrop is **flooded**
+  from the sheet's edges instead — only backdrop that connects to the outside is
+  removed, and shade enclosed by a plant survives however dark it is. Its shades are
+  read off the sheet's border rather than assumed, because a sheet exported flattened
+  out of an image editor carries the editor's transparency **checkerboard** — two
+  greys about 15 apart, which no single backdrop colour covers.
 - **Cutting.** The sprites are found by looking for the empty gaps between them, not
-  by assuming a grid; the rows are not evenly spaced and a fixed grid slices the
-  tall trees in half.
+  by assuming a grid; the rows are not evenly spaced and a fixed grid slices the tall
+  trees in half. Each sprite's own top and bottom are then found within its row, so a
+  knee-high shrub painted beside a tree is its own height and not the row's.
+- **Sorting.** The rows carry the meaning — bare wood, broadleaves, conifers, then
+  bushes for the rest — but a row can hold more than one kind, and those are split by
+  the shape of the art rather than by counting columns, so the sheet can be repainted
+  with more (or fewer) of anything without the code changing. A squat piece among the
+  bare wood is a leafless bush; a piece carrying its width up at the top, over a bare
+  trunk, is a palm rather than a conifer.
 
-Sprites are resampled to a few times their drawn size and the atlas carries mip
-levels, sampled `LinearClamp` with a transparent gutter around each. Point-sampling
-art that draws several times smaller than it is stored makes foliage crawl.
+Each kind is resampled to the height that kind is stored at — trees to one, bushes to
+another — so a plant's size on screen follows from what it is rather than from how big
+it happened to be drawn on the sheet. The atlas carries mip levels, sampled
+`LinearClamp` with a transparent gutter around each sprite. Point-sampling art that
+draws several times smaller than it is stored makes foliage crawl.
 
 **Trees thin out towards a biome's edge.** Canopy counts are scaled by
 `ClimateEdgeDistance`, so a wood frays into the open ground beside it instead of
@@ -220,23 +286,34 @@ stepping with vertical cliffs. Shared corners use the same level, so the surface
 stays seamless. Tiles are drawn as colored triangles (two per tile) through a
 `BasicEffect`.
 
-**The shore is a shore, not a blend.** Terrain colour is interpolated across each
-tile quad, so a land vertex beside a water vertex smears green into blue over *the
-whole width of a tile* — barely noticeable at 64 pixels, a hundred pixels of haze at
-312. Picking a winning side per vertex does not fix that; it only moves which
-colours smear. So the waterline is cut instead: each vertex records the side it came
-down on (majority of the tiles meeting there, ties to water so narrow rivers keep
-their width), and a tile on the far side of one re-derives that corner **from its
-own side only**. Water tiles are therefore all water, land tiles all land, and the
-boundary falls exactly on the tile edge. Everywhere else the shared vertex is used
-and the terrain stays seamless.
+**The coastline is the waterline, not the tile grid.** A water tile that paints its
+whole diamond makes the coast a sawtooth of diamond edges — invisible at 64 pixels,
+a staircase of 250-pixel teeth at 312. So a shore tile — one with water on one side
+of it and dry land on the other, *whichever of the two it is itself* — draws in two
+layers: the water sheet across the whole tile, then the ground over it, cut back at
+the waterline. Both sides of a coast draw the same two layers and cut against the
+same field, so the line runs across tiles instead of around them.
 
-The join is covered by **surf**: breakers just inside the water's edge with a
-fainter swell behind, each end pushed out by a different amount so the foam doesn't
-trace the tile grid's staircase back in white. They are sized and spaced in **iso
-pixels, not as a fraction of the edge** — laid out proportionally, a 312-pixel tile
-got three enormous dashes lying out in the water. Rivers get the same treatment,
-being water meeting land like any other.
+The line itself comes from a **wetness field**: 0 on a water tile, 1 on land,
+blurred once and sampled smoothly, then read through a position warp (the same trick
+the biome borders use) so it wanders off the grid it was built from rather than
+tracing it. It is combined with how far the ground stands above the local water
+surface, which is what keeps the edge crisp on a steep bank and lets the wet field
+decide on a flat one; ground well clear of the surface is dry whatever the field
+says, so a bank cannot flood.
+
+**The cut is geometric.** Fading the ground out cannot make an edge narrower than
+the cell it is interpolated across, and where a bank plunges into the water one cell
+covers a long stretch of screen — the coast came out as a smear of half-transparent
+ground trailing into the water. Each cell is clipped along the waterline instead.
+Subdividing shore tiles more finely was the other option and it does not work: an
+edge shared with a coarser tile cracks (the T-junction seams removed in #24).
+
+The water sheet lies level with the water beside it, taken from the water tiles at
+each corner rather than from the terrain, and climbs behind the bank where the
+ground is higher so a cut never exposes the sky. **Every** water tile draws that
+same sheet: mixing subdivided sheets near the coast with flat quads further out
+leaves slivers of background wherever the two rules disagree along a shared edge.
 
 **Biome edges blend, with no hard tile borders.** Each corner is colored by
 averaging the biomes of the (up to four) tiles meeting there, and those colors
@@ -263,6 +340,18 @@ resize; `MaxPlantsPerTile` caps that so a very large tile can't put six figures 
 sprites into one chunk mesh. To make everything bigger on screen, zoom the camera
 instead.
 
+**The ground texture obeys that too — it repeats rather than stretches.** Painted
+for a `BaseTileWidth` tile, one repeat stretched across a 312-pixel tile blew a
+painted stone up bigger than a tree. It now repeats about once per `BaseTileWidth`
+of ground (`GroundRepeatPixels`), so the detail stays the size it was drawn at
+whatever the tiles are set to. The repeat count is snapped to a divisor of `Subdiv`
+so no sub-cell straddles a join, and each repeat is flipped by its own position hash
+so a tile doesn't read as one square stamped six times. Texture coordinates are
+therefore held **per sub-cell** rather than per sub-vertex (`_cellUv`): they jump
+back to the start of the texture at every repeat, so the cells either side of a join
+disagree about the vertex between them — which costs nothing, since the mesh builder
+writes its own vertices per triangle anyway.
+
 Chunk meshes are baked in iso pixels, so every resize invalidates them:
 `Iso.Version` bumps, and `WorldRenderer` throws away all cached meshes and
 rebuilds the visible ones. That is why the key-repeat is deliberately unhurried.
@@ -286,19 +375,181 @@ exactly as a tile resize does.
 the same corner elevations as the terrain so it drapes over hills. It is a
 per-chunk mesh cached exactly like the terrain, built only while the grid is on.
 
+**Shadows follow the sun, without rebuilding anything.** A plant's shadow is not one
+disc but a short row of four soft ones, all baked at the plant's own foot, each carrying
+in the vertex's otherwise unused z how far along the shadow it belongs — nothing else in
+the mesh uses z, everything is drawn flat. The renderer then puts a shear in the view
+matrix that turns that z into an offset across the ground away from the sun. The near
+disc barely moves, so the pool stays under the plant that cast it; the rest fan out
+further and further as the sun drops (1/tan of its altitude, clamped — at a few degrees
+the real figure runs to ten times the caster's height and the row pulls apart into a
+dotted line), which is what draws the shadow out into a long tapering smear. A row of
+pieces is the only way this can stretch at all: the shear can translate a quad, not
+scale one. Vertices at z = 0 pass through untouched, so one matrix moves every shadow on
+the map and nothing else, and a full day passes without a vertex being re-uploaded — the
+same trick the directional light already plays.
+
+Each chunk is therefore **three meshes**, not one — its ground, its shadows and its
+plants — drawn in that order across every visible chunk. Keeping the shadows to
+themselves is what lets the shear and the day's shadow strength apply to them alone:
+the strength is `SkyLight.Sunlight`, which is zero while the sun is below the horizon,
+so at night the layer is skipped entirely and there are no shadows without a sun.
+
+The shear rides in the **view** matrix, not the world matrix. It is singular by design
+(it flattens z), and `BasicEffect` derives the matrix it lights normals with by
+inverting the world matrix: given a flattened one, every normal comes out garbage and
+the whole map draws black.
+
+## Mobs
+
+Everything that walks lives in `Worlds/Mobs/`. `Mob` is the base class: a point in
+**fractional world-tile space** with a speed, a facing and a walk cycle. It is not a
+tile occupant — it walks in a straight line and the grid only comes up as a question
+of what it may step onto — so movement stays smooth however big the tiles are drawn.
+Subclasses supply how fast they walk and what they want:
+
+```csharp
+public sealed class Sheep : Mob
+{
+    public override MobKind Kind => MobKind.Sheep;
+    protected override float WalkSpeed => 0.55f;      // tiles per second
+    protected override void Think(World world, float dt) { /* wander */ }
+}
+```
+
+`WalkToward` does the walking and reports back `Moving`, `Arrived` or `Blocked`. It
+refuses to step into water, off the loaded map, or up more than a few elevation
+levels, and if the direct line is refused it tries a slant either side of it before
+giving up — enough to follow a shoreline round rather than stopping dead against it.
+A `Blocked` mob's brain simply picks somewhere else to be.
+
+**Sheep wander in a graze-walk-graze cycle.** Each picks a spot within a few tiles of
+**where it was put down** — not of where it currently is, which is a random walk and
+drifts off over the horizon given long enough — ambles to it, then grazes for a few
+seconds before choosing again. Every sheep rolls its rests out of its own seeded RNG,
+so a flock never sets off as one block.
+
+### Vitals
+
+Every mob carries a `Vitals` — its body, as opposed to its brain. `Mob` only decides
+what to do; everything that *happens* to it happens here:
+
+| | |
+| --- | --- |
+| `Health` / `MaxHealth` | what it has left, and full |
+| `Hunger` | 0 fed → 1 starving |
+| `Tiredness` | 0 fresh → 1 dead on its feet |
+| `Gender` | rolled from the mob's seed |
+| `AgeDays` | plus `Stage` — young, adult, old |
+| `Ailments` | `Starving · Exhausted · Injured · Sick · Frail`, as flags — they stack |
+
+**Bodies keep time in world days, not seconds.** A mob ages one day per turn of the
+sun whatever `DayLength` is set to, so a sheep lives at the same pace against the sky
+whether a day takes four minutes or ten. Every rate is written as a "days to" —
+`DaysToStarve`, `DaysToRest`, `DaysToHeal` — because "how long an animal that never
+eats takes to go from full to starving" is a number you can argue with, and a rate per
+second is not. A species sets the ones it disagrees with and leaves the rest.
+
+What a mob is doing decides what its body is charged: `MobActivity` — idle, moving,
+resting, feeding. Walking tires it at the full rate, standing about at a fraction of
+it, and grazing pays back both hunger and tiredness, which is why a sheep left alone
+never starves: a stopped sheep is a feeding sheep.
+
+The wasting ailments are **read off the body every frame** rather than remembered, so
+they clear the moment the animal is fed or rested — with a gap between the level that
+raises one and the level that drops it, or a mob sitting exactly on the line would
+flicker in and out of it. `Injured` follows the wounds it has taken (below half
+health); `Sick` is the one nothing here raises, left for whatever gives an animal a
+disease. Ailments then draw on health — starvation hardest, exhaustion and old age
+more slowly, all of them stacking — and a body with none of them heals instead. At
+zero health the mob dies and the world clears it away that same frame.
+
+Age is visible: `Scale` is the mob's own size jitter times `Growth`, so a lamb is a
+small sheep rather than a different sprite, and a flock turns up as assorted ages with
+the odd young one among them.
+
+**Click a mob to read it.** `WorldRenderer.PickMob` turns a screen point into the mob
+under it, frontmost first, off the positions worked out for the last frame drawn — the
+one the person clicking was looking at. The hit box is never allowed below
+`MinPickSize` on screen, because a sheep is a dozen pixels tall at most and a lamb far
+less; asking anyone to hit that exactly is asking them to miss. The selected mob stands
+in a pale pool of light, and its vitals go up on the read-out beneath the tile lines.
+Clicking bare ground clears it.
+
+The world owns its mobs rather than the chunks doing so: a mob walks, so the chunk
+under it changes, and one unloaded with the ground it happened to be over would blink
+out of existence. A small flock is put down at the spawn point on the first frame that
+finds dry land there — `SpawnStarterFlock`, which searches outward in rings from the
+camera and simply tries again next frame if there is nothing but sea.
+
+Rendering them takes a different path from everything else on the map. Terrain and
+plants are baked once into a chunk's GPU buffers and drawn for as long as the chunk
+lives; a mob is somewhere else next frame, so `SpriteLayer` keeps its quads in plain
+CPU arrays (reused between frames) and hands them straight to the device. Their
+shadows join the plants' shadow layer and so swing round with the same sun.
+
+**A mob is drawn among the plants, not over them.** Each chunk's vegetation mesh
+records where every plant's geometry begins and the screen y it was sorted at
+(`ChunkMesh.Slice`), so the mesh can be drawn in slices: the plants down to a mob's
+feet, then the mob, then the rest. Both sides are already in y order, so it is a merge
+of two sorted lists, and a chunk with no mobs on it still draws in a single call. The
+alternative — one draw for the whole layer — is what made a sheep walk over the front
+of a tree it was standing behind.
+
+The obvious fix, a depth buffer, is not open to us: these are alpha-blended billboards,
+and a nearer one would write depth from its transparent corners and punch rectangles
+out of everything behind it. Depth needs alpha *testing*, which would mean giving up
+`BasicEffect` and with it the sun on the foliage.
+
+Their feet sit on `SurfaceLevel`, which is the same Catmull-Rom of the level field the
+terrain mesh is built from, only read straight out of the world instead of out of one
+chunk's cached copy. Sampling the same curve is what puts a mob on the surface the
+ground was actually drawn at rather than on the flat top of its tile.
+
+The art is **painted in code**, like the grass and the rocks: a sheep is a cluster of
+overlapping circles for the fleece — one ellipse comes out as a bean, several make it
+lumpy the way wool is — over a dark head and four short legs, supersampled for its
+edges and packed into the same atlas as everything else. It is painted facing right,
+and mirrored by flipping its UVs when a mob walks the other way.
+
 ## Controls
 
 | Input | Action |
 | --- | --- |
-| Arrow keys / WASD | Pan the camera |
+| TAB | Open / close the settings panel |
+| Arrow keys / WASD | Pan the camera — or, with the panel open, walk it |
 | Mouse drag / touch drag | Pan the camera |
 | Mouse wheel | Zoom in / out (0.4× to 16×) |
-| Mouse over a tile | Read its height, temperature and moisture in the HUD |
+| Mouse over a tile | Read its coordinates, biome and climate in the HUD |
+| Click a mob | Select it — its vitals go up on the HUD; click bare ground to clear |
 | G | Toggle the tile-grid overlay |
 | `[` / `]` | Shrink / grow the tiles (hold to repeat) |
+| `,` / `.` | Wind the time of day back / forward (holds the clock) |
+| P | Hold the clock where it is, or let the day run again |
 | M | Cycle the map view: biome → height → temp → moisture |
-| `,` / `.` | Narrow / widen rivers (rebuilds the map) |
 | F11 | Toggle fullscreen (desktop) |
+| ESC | Close the panel, or quit |
+
+### The settings panel
+
+`SettingsMenu` gathers the world's knobs — the time of day, the clock, the day length,
+the world dials (climate and age), the map view, the tile size, the zoom, the grid —
+somewhere they can be found, instead of each one living on a key you have to know about. TAB opens it; UP/DOWN walk it,
+LEFT/RIGHT change the selected setting (held, for the ones with a long range), ENTER
+acts on it, and rows can be clicked.
+
+Each setting is one row: a label, something that reads the current value back as text,
+and a step that changes it. The panel knows nothing about what any of them mean, so
+adding a setting is adding a row.
+
+**A day is four minutes** (`SkyLight.DayLength`, 240 s), which the panel steps between
+20 s and 10 minutes. Long enough that the light on the ground is something you notice
+changing rather than watch race, short enough that a session sees several dawns.
+
+While it is open the world is handed an input state that is never updated, so it reads
+as untouched: the panel and the camera share the arrow keys, and this is what stops one
+press doing both. The world itself keeps running behind it — the sun crosses the sky,
+chunks stream — it just stops listening.
 
 ## Where to go next
 
