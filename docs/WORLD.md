@@ -400,6 +400,49 @@ The shear rides in the **view** matrix, not the world matrix. It is singular by 
 inverting the world matrix: given a flattened one, every normal comes out garbage and
 the whole map draws black.
 
+### Depth-tested foliage and mobs (prototype, B)
+
+By default the plants and the mobs resolve against each other by **painter's order**: a
+per-frame foot-Y sort, and a slice interleave that breaks each chunk's veg mesh wherever a
+mob is standing so the mob is covered by the trees in front of it and covers the ones
+behind. That order is correct for one thing at a time standing on flat-enough ground, but
+it can express nothing about a plant or a mob standing **behind a hill** — the plants and
+mobs are drawn as a layer *over* the whole terrain, so a hill between them and the camera
+never hides them.
+
+Pressing **B** (`World.DepthBuffer`) switches on a **GPU depth buffer** for that layer
+instead. It rests on one depth key shared by the ground and the billboards:
+
+```
+depth = 0.5 − (isoY − focusY) · zoom / (viewportHeight · DepthMargin)
+```
+
+The **ground** reads it per fragment from the screen-Y it lands at (so within the ground
+nothing is resolved by depth — every fragment at a given pixel shares a screen-Y, and the
+layering of water, biome blends, snow and surf is still decided by draw order). Each
+**billboard** reads it *once from its foot*, baked into the vertex z (`MeshBuilder.DepthZ`
+for plants and grass, a `depthZ` argument for mobs) — so a whole plant or mob resolves at
+the ground it stands on, not by its own height on screen (a tall crown must not read as
+"further back" than its base). The two forms are the same formula, so terrain in front of
+a plant hides it and terrain behind does not — the case the sort cannot draw — and plants
+and mobs resolve against each other and the terrain per pixel, which lets the whole veg
+mesh and every mob be drawn straight through with **no sort and no slice interleave**.
+
+Two matrices carry the key. The ground uses a projection that reads depth from the
+post-view screen-Y; the foliage/mob pass uses a projection that reads it from the baked z,
+with the camera focus folded out of z in the view first, so the subtraction never runs as
+(huge − huge) far from the origin and the depth keeps its precision. A billboard z is
+otherwise the shadow lean (above), but shadows and bodies are never the same quad, and the
+depth pass draws only bodies.
+
+The one real cost: depth-writing and the smooth alpha blend do not mix — a translucent leaf
+edge would stamp an invisible occluder — so the depth pass **alpha-tests** through a stock
+`AlphaTestEffect` (a texel is kept whole or dropped) rather than blending. Foliage edges
+come out harder than the painter path's, and anything carried below the alpha threshold (a
+faint snow cap, the soft selection ring) thins out. `AlphaTestEffect` does no lighting, so
+the day's tint on an up-facing billboard is folded into its `DiffuseColor` each frame. The
+depth path is a prototype and off by default; the painter path is unchanged.
+
 ## Mobs
 
 Everything that walks lives in `Worlds/Mobs/`. `Mob` is the base class: a point in
@@ -523,6 +566,7 @@ and mirrored by flipping its UVs when a mob walks the other way.
 | Mouse over a tile | Read its coordinates, biome and climate in the HUD |
 | Click a mob | Select it — its vitals go up on the HUD; click bare ground to clear |
 | G | Toggle the tile-grid overlay |
+| B | Toggle the depth-tested foliage/mob path (prototype — see below) |
 | `[` / `]` | Shrink / grow the tiles (hold to repeat) |
 | `,` / `.` | Wind the time of day back / forward (holds the clock) |
 | P | Hold the clock where it is, or let the day run again |

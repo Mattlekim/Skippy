@@ -63,6 +63,9 @@ public sealed class InputState
     /// <summary>True only on the frame the clock key (P) goes down: hold the sun, or let it run again.</summary>
     public bool ToggleClockRequested { get; private set; }
 
+    /// <summary>True only on the frame the depth-buffer key (B) goes down: switch the depth-tested draw path on or off.</summary>
+    public bool ToggleDepthBufferRequested { get; private set; }
+
     private KeyboardState _prevKeyboard;
     private Vector2 _prevPointer;
     private bool _prevPointerDown;
@@ -89,6 +92,8 @@ public sealed class InputState
             keyboard.IsKeyDown(Keys.M) && _prevKeyboard.IsKeyUp(Keys.M);
         ToggleClockRequested =
             keyboard.IsKeyDown(Keys.P) && _prevKeyboard.IsKeyUp(Keys.P);
+        ToggleDepthBufferRequested =
+            keyboard.IsKeyDown(Keys.B) && _prevKeyboard.IsKeyUp(Keys.B);
 
         // Held, not edge-triggered: the world applies its own press-and-repeat.
         int tileDir = 0;

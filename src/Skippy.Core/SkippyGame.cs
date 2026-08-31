@@ -43,6 +43,12 @@ public class SkippyGame : Game
         {
             PreferredBackBufferWidth = 1280,
             PreferredBackBufferHeight = 720,
+
+            // A depth buffer for the depth-tested vegetation/mob path (toggled with B).
+            // It is the default format anyway, but the painter path never needed one, so
+            // ask for it explicitly rather than lean on the platform default — the browser
+            // (KNI/WebGL) head in particular. Clear(SkyColor) resets it to far each frame.
+            PreferredDepthStencilFormat = DepthFormat.Depth24Stencil8,
         };
         Content.RootDirectory = "Content";
         IsMouseVisible = true;
@@ -124,6 +130,7 @@ public class SkippyGame : Game
                                       (int)MathF.Floor(_world.Camera.FocusTile.Y)));
         _hudLines.Add("TILE " + Iso.TileWidth);
         _hudLines.Add("VIEW " + _world.MapView.Name());
+        _hudLines.Add("DEPTH " + (_world.DepthBuffer ? "ON" : "OFF") + " (B)");
 
         // The clock reads as a wall clock, and says so when it is being held still.
         _hudLines.Add("TIME " + _world.Sky.Hour.ToString("00", CultureInfo.InvariantCulture)

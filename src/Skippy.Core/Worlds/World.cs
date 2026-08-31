@@ -33,6 +33,13 @@ public class World
     /// <summary>Draws one line along every tile edge, on top of the world. Toggled with G.</summary>
     public bool ShowTileGrid { get; set; }
 
+    /// <summary>
+    /// Resolve plants and mobs against the terrain and each other with a real GPU depth
+    /// buffer instead of the painter's-order sort. The one thing it can do that the sort
+    /// cannot: hide a plant or a mob standing behind a hill. Toggled with B (prototype).
+    /// </summary>
+    public bool DepthBuffer { get; set; }
+
     /// <summary>What the terrain is coloured by: the game view, or a raw generator field. Cycled with M.</summary>
     public MapView MapView { get; set; } = MapView.Biome;
 
@@ -164,6 +171,9 @@ public class World
 
         if (input.ToggleTileGridRequested)
             ShowTileGrid = !ShowTileGrid;
+
+        if (input.ToggleDepthBufferRequested)
+            DepthBuffer = !DepthBuffer;
 
         if (input.CycleMapViewRequested)
             MapView = MapView.Next();

@@ -380,7 +380,47 @@ public sealed class WorldRenderer : IDisposable
             Texture = _atlas.Texture,
             World = Matrix.Identity,
         };
+
+        // The depth-tested foliage/mob pass writes depth, which cannot coexist with the
+        // smooth alpha blend the painter path uses — a translucent leaf edge would stamp an
+        // invisible occluder. So that pass alpha-tests instead: a texel is either kept whole
+        // (and writes depth) or discarded. BasicEffect has no alpha test; AlphaTestEffect is
+        // the stock effect that does, sharing the same vertex format and matrices. It does
+        // not light, so the day's tint on the foliage is folded into DiffuseColor per frame.
+        _foliageEffect = new AlphaTestEffect(gd)
+        {
+            VertexColorEnabled = true,
+            Texture = _atlas.Texture,
+            World = Matrix.Identity,
+            ReferenceAlpha = 128,
+            AlphaFunction = CompareFunction.GreaterEqual,
+        };
     }
+
+    /// <summary>
+    /// Alpha-testing effect for the depth-tested foliage/mob pass. See the constructor.
+    /// </summary>
+    private readonly AlphaTestEffect _foliageEffect;
+
+    /// <summary>
+    /// Depth on for the ground and the foliage/mob billboards while the depth path is live:
+    /// nearer (larger iso-Y) wins, and equal depths — a terrain overlay over its base, a
+    /// plant's foot on the ground it stands on — still draw, so LessEqual rather than Less.
+    /// </summary>
+    private static readonly DepthStencilState DepthReadWrite = new()
+    {
+        DepthBufferEnable = true,
+        DepthBufferWriteEnable = true,
+        DepthBufferFunction = CompareFunction.LessEqual,
+    };
+
+    /// <summary>
+    /// How much of the depth range one screen-height of iso-Y spends. The depth key is
+    /// centred at 0.5 and drifts ±(1/2·margin) over the visible height, so margin = 2 keeps
+    /// on-screen content inside [0.25, 0.75] — clear of the near and far planes with room for
+    /// a billboard whose foot sits a little off the bottom of the screen.
+    /// </summary>
+    private const float DepthMargin = 2f;
 
     /// <summary>Number of chunk meshes currently resident on the GPU.</summary>
     public int ResidentMeshCount => _meshes.Count;
@@ -450,7 +490,12 @@ public sealed class WorldRenderer : IDisposable
         Matrix view = Matrix.CreateTranslation(-focusIso.X, -focusIso.Y, 0f)
                     * Matrix.CreateScale(zoom, zoom, 1f)
                     * Matrix.CreateTranslation(center.X, center.Y, 0f);
-        _effect.Projection = Matrix.CreateOrthographicOffCenter(0, gd.Viewport.Width, gd.Viewport.Height, 0, 0, 1);
+
+        // The plain orthographic projection the painter path has always used: xy → screen,
+        // z left flat. The two depth-coupled variants below are built from it.
+        float vw = gd.Viewport.Width, vh = gd.Viewport.Height;
+        Matrix baseProj = Matrix.CreateOrthographicOffCenter(0, vw, vh, 0, 0, 1);
+        _effect.Projection = baseProj;
 
         ApplyLighting(world);
 
@@ -459,14 +504,66 @@ public sealed class WorldRenderer : IDisposable
         // shadows with the plants' shadows, they themselves after the plants.
         BuildMobGeometry(world, isoMin, isoMax);
 
-        // Three layers, each drawn across every visible chunk before the next begins: the
-        // ground, then the shadows lying on it, then the plants casting them. Keeping the
-        // shadows to themselves is what lets the sun's shear and the day's shadow strength
-        // be set for them alone.
         float shadowStrength = ShadowStrength(world.Sky);
+
+        // The depth path is only meaningful in the lit game view; the flat data views keep
+        // the painter path (and carry no plants or mobs anyway).
+        bool depth = world.DepthBuffer && world.MapView == MapView.Biome;
+
+        // Two ways to turn iso-Y into a depth key, one formula: depth = 0.5 − (isoY − focusY)
+        // · zoom / (viewportHeight · margin). The ground reads it per fragment from the
+        // screen-Y it lands at; a billboard reads it once from its foot (baked into z), so a
+        // whole plant or mob resolves at the ground it stands on. Both agree, so terrain in
+        // front of a plant (a hill between it and the camera) hides it, and terrain behind
+        // does not — the one thing the painter's sort cannot express.
+        //
+        // The foliage view subtracts the camera focus from z first: the world's iso-Y runs
+        // to millions of pixels out, and folding the focus in before the projection keeps the
+        // subtraction (and the depth precision) from happening as (huge − huge) on the GPU.
+        Matrix viewFoliage = view;
+        viewFoliage.M43 = -focusIso.Y;
+
+        Matrix projFoliage = baseProj;
+        projFoliage.M33 = -zoom / (vh * DepthMargin);   // z (= footIsoY − focusY) → depth
+        projFoliage.M43 = 0.5f;
+
+        Matrix projGround = baseProj;
+        if (depth)
+        {
+            projGround.M23 = -1f / (vh * DepthMargin);      // screen-Y → depth
+            projGround.M33 = 0f;                            // the ground's own z is unused
+            projGround.M43 = 0.5f + 0.5f / DepthMargin;
+        }
+
+        if (depth)
+            DrawDepthPath(gd, world, view, viewFoliage, projGround, projFoliage, baseProj, shadowStrength);
+        else
+            DrawPainterPath(gd, world, view, viewFoliage, baseProj, projFoliage, shadowStrength);
+
+        // Clouds and their shadows sit above the ground, so they come after it — and
+        // only in the game view, where they belong (the data views stay unclouded).
+        if (world.MapView == MapView.Biome)
+        {
+            _clouds.DrawShadows(gd, focusIso, center, zoom, world.Sky);
+            _clouds.DrawClouds(gd, focusIso, center, zoom, world.Sky);
+        }
+    }
+
+    /// <summary>
+    /// The original painter path: three layers — ground, then shadows, then plants with the
+    /// mobs sliced in among them by foot-Y — drawn back to front with the depth buffer off,
+    /// so draw order alone decides what covers what. Unchanged in behaviour; the plants now
+    /// draw under the foliage projection so the foot-depth baked into their z (which the
+    /// depth path needs) stays inside the clip range here, where it is otherwise ignored.
+    /// </summary>
+    private void DrawPainterPath(GraphicsDevice gd, World world, Matrix view, Matrix viewFoliage,
+                                 Matrix baseProj, Matrix projFoliage, float shadowStrength)
+    {
+        gd.DepthStencilState = DepthStencilState.None;
         foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
         {
             _effect.View = view;
+            _effect.Projection = baseProj;
             pass.Apply();
             foreach (Chunk chunk in _visible)
                 _meshes[chunk.Coord].Draw(gd);
@@ -496,7 +593,8 @@ public sealed class WorldRenderer : IDisposable
             // The plants, with the mobs standing among them: each chunk's mesh is drawn in
             // slices, broken wherever a mob is standing, so a sheep is covered by the trees
             // in front of it and covers the ones behind.
-            _effect.View = view;
+            _effect.View = viewFoliage;
+            _effect.Projection = projFoliage;
             pass.Apply();
             BeginMobPass();
             foreach (Chunk chunk in _visible)
@@ -505,17 +603,104 @@ public sealed class WorldRenderer : IDisposable
 
             // The overlay goes last so it sits on top of terrain and vegetation alike.
             if (world.ShowTileGrid)
+            {
+                _effect.View = view;
+                _effect.Projection = baseProj;
+                pass.Apply();
                 foreach (Chunk chunk in _visible)
                     _gridMeshes[chunk.Coord].Draw(gd);
+            }
+        }
+    }
+
+    /// <summary>
+    /// The depth-tested path (toggled with B). The ground writes depth so a plant or a mob
+    /// standing behind a hill is hidden by it — the case the painter path cannot draw at all;
+    /// the foliage and the mobs then test and write depth too, so they resolve against the
+    /// terrain and one another on the GPU, and the whole veg mesh and every mob can be drawn
+    /// straight through with no foot-Y sort and no slice interleave.
+    ///
+    /// Depth and the smooth alpha blend do not mix — a translucent leaf edge would write an
+    /// invisible occluder — so the foliage/mob layer alpha-tests through <see cref="_foliageEffect"/>
+    /// instead: a texel is kept whole or dropped. Its edges are therefore harder than the
+    /// painter path's, and anything it carries below the alpha threshold (a faint snow cap, the
+    /// soft selection ring) thins out — the honest cost of writing depth from a billboard.
+    /// </summary>
+    private void DrawDepthPath(GraphicsDevice gd, World world, Matrix view, Matrix viewFoliage,
+                               Matrix projGround, Matrix projFoliage, Matrix baseProj, float shadowStrength)
+    {
+        // Ground first, writing its per-fragment depth for everything above to test against.
+        gd.DepthStencilState = DepthReadWrite;
+        foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
+        {
+            _effect.View = view;
+            _effect.Projection = projGround;
+            pass.Apply();
+            foreach (Chunk chunk in _visible)
+                _meshes[chunk.Coord].Draw(gd);
         }
 
-        // Clouds and their shadows sit above the ground, so they come after it — and
-        // only in the game view, where they belong (the data views stay unclouded).
-        if (world.MapView == MapView.Biome)
+        // Shadows lie on the ground, drawn right after it with depth off — a pool of shade
+        // does not occlude, and staying out of the buffer keeps it from fighting the ground.
+        if (shadowStrength > 0f)
         {
-            _clouds.DrawShadows(gd, focusIso, center, zoom, world.Sky);
-            _clouds.DrawClouds(gd, focusIso, center, zoom, world.Sky);
+            gd.DepthStencilState = DepthStencilState.None;
+            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
+            {
+                _effect.View = SunShear(world.Sky) * view;
+                _effect.Projection = baseProj;
+                _effect.Alpha = shadowStrength;
+                pass.Apply();
+                foreach (Chunk chunk in _visible)
+                    _shadowMeshes[chunk.Coord].Draw(gd);
+                _mobShadows.Draw(gd);
+                _effect.Alpha = 1f;
+            }
         }
+
+        // Foliage + mobs, depth-tested and depth-writing. Order no longer matters, so the
+        // slice machinery is bypassed entirely: all the plants, then all the mobs.
+        gd.DepthStencilState = DepthReadWrite;
+        _foliageEffect.View = viewFoliage;
+        _foliageEffect.Projection = projFoliage;
+        _foliageEffect.DiffuseColor = FoliageLight(world.Sky);
+        foreach (EffectPass pass in _foliageEffect.CurrentTechnique.Passes)
+        {
+            pass.Apply();
+            foreach (Chunk chunk in _visible)
+                _vegMeshes[chunk.Coord].Draw(gd);
+            _mobSprites.Draw(gd);
+        }
+
+        // The overlay on top, depth off.
+        if (world.ShowTileGrid)
+        {
+            gd.DepthStencilState = DepthStencilState.None;
+            foreach (EffectPass pass in _effect.CurrentTechnique.Passes)
+            {
+                _effect.View = view;
+                _effect.Projection = baseProj;
+                pass.Apply();
+                foreach (Chunk chunk in _visible)
+                    _gridMeshes[chunk.Coord].Draw(gd);
+            }
+        }
+
+        // Hand the device back the way the rest of the frame (clouds, HUD) expects it.
+        gd.DepthStencilState = DepthStencilState.None;
+    }
+
+    /// <summary>
+    /// The flat tint the alpha-testing foliage effect stands in for the sun with, since it
+    /// does no lighting of its own. A plant billboard faces straight up (its normal is
+    /// <c>Up</c>), so the lit path only ever gave it one shade a frame anyway: the ambient
+    /// plus the sun scaled by how much of it an upward face catches. This reproduces that, so
+    /// foliage under the depth path tracks the day the same as under the painter path.
+    /// </summary>
+    private static Vector3 FoliageLight(SkyLight sky)
+    {
+        float up = MathF.Max(0f, -sky.LightDirection.Y);
+        return Vector3.Clamp(sky.Ambient + sky.SunColor * up, Vector3.Zero, Vector3.One);
     }
 
     /// <summary>
@@ -853,8 +1038,13 @@ public sealed class WorldRenderer : IDisposable
         foreach (VegItem item in _veg)
         {
             _vegSlices.Add(new ChunkMesh.Slice(item.Pos.Y, _builder.Mark()));
+            // Every quad of this plant carries its foot's iso-Y as a depth key, so the
+            // depth-tested path resolves the whole billboard at its foot rather than by its
+            // own screen height (a tall crown must not read as "further back" than its base).
+            _builder.DepthZ = item.Pos.Y;
             AppendVegetation(item);
         }
+        _builder.DepthZ = 0f;
         veg = _builder.Upload(neighborMask, _vegSlices);
         _builder.Clear();
     }
@@ -2474,7 +2664,7 @@ public sealed class WorldRenderer : IDisposable
         {
             float r = draw.Height * SelectionRadius;
             _mobSprites.Sprite(draw.Foot, new Vector2(r * 2f, r * 2f * ShadowSquash), Center,
-                               _atlas.SoftDisc, SelectionGlow);
+                               _atlas.SoftDisc, SelectionGlow, depthZ: draw.Foot.Y);
         }
 
         // The bob rides on the walk cycle, which only advances while ground is being
@@ -2486,7 +2676,7 @@ public sealed class WorldRenderer : IDisposable
         // A light per-mob tint, exactly as the plants get: a flock reads better when no
         // two of them are quite the same shade of white.
         _mobSprites.Sprite(at, size, BottomCenter, draw.Art, Vary(Color.White, ref rng, 0.06f),
-                           flipX: mob.Facing < 0f);
+                           flipX: mob.Facing < 0f, depthZ: draw.Foot.Y);
     }
 
     /// <summary>
@@ -2737,6 +2927,7 @@ public sealed class WorldRenderer : IDisposable
         _gridMeshes.Clear();
         _clouds.Dispose();
         _effect.Dispose();
+        _foliageEffect.Dispose();
         _atlas.Texture.Dispose();
     }
 }

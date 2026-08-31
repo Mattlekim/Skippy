@@ -57,18 +57,22 @@ public sealed class SpriteLayer
     /// draw time and swings round with the sun.
     /// </summary>
     public void Sprite(Vector2 pos, Vector2 size, Vector2 origin, in TextureAtlas.Region region,
-                       Color color, bool flipX = false, float lean = 0f)
+                       Color color, bool flipX = false, float lean = 0f, float depthZ = 0f)
     {
         Vector2 tl = pos - size * origin;
         Vector2 br = tl + size;
         float u0 = flipX ? region.U1 : region.U0;
         float u1 = flipX ? region.U0 : region.U1;
 
+        // z carries either a shadow's lean (for the sun-shear pass) or a mob body's foot
+        // iso-Y (for the depth-tested pass); a mob is never both at once, so they add. The
+        // shear pass flattens z back out, and the painter pass ignores it.
+        float z = lean + depthZ;
         int b = Reserve(4, 6);
-        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, lean), color, Up, new Vector2(u0, region.V0));
-        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, lean), color, Up, new Vector2(u1, region.V0));
-        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, lean), color, Up, new Vector2(u1, region.V1));
-        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, lean), color, Up, new Vector2(u0, region.V1));
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, z), color, Up, new Vector2(u0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, z), color, Up, new Vector2(u1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, z), color, Up, new Vector2(u1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, z), color, Up, new Vector2(u0, region.V1));
         _indices[_indexCount++] = (short)b;
         _indices[_indexCount++] = (short)(b + 1);
         _indices[_indexCount++] = (short)(b + 2);

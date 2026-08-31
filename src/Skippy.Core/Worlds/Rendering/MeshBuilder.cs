@@ -31,6 +31,15 @@ public sealed class MeshBuilder
     private readonly List<ChunkMesh.Segment> _segments = new();
     private Vector2 _min, _max;
 
+    /// <summary>
+    /// The depth key written into the z of the next <see cref="Sprite"/> / <see cref="Line"/>
+    /// billboards. It carries a plant's foot iso-Y so the depth-tested draw path can resolve
+    /// the whole billboard at its foot (see <c>WorldRenderer</c>'s foliage projection); the
+    /// painter path ignores z entirely. Left at 0 for terrain and the grid, which do not want
+    /// it. Shadows keep their own lean in z (see <see cref="ShadowSprite"/>) and ignore this.
+    /// </summary>
+    public float DepthZ;
+
     public MeshBuilder(GraphicsDevice gd) => _gd = gd;
 
     public void Clear()
@@ -87,11 +96,12 @@ public sealed class MeshBuilder
     {
         Vector2 tl = pos - size * origin;
         Vector2 br = tl + size;
+        float z = DepthZ;
         int b = Reserve(4, 6);
-        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, 0f), color, Up, new Vector2(region.U0, region.V0));
-        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, 0f), color, Up, new Vector2(region.U1, region.V0));
-        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, 0f), color, Up, new Vector2(region.U1, region.V1));
-        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, 0f), color, Up, new Vector2(region.U0, region.V1));
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, z), color, Up, new Vector2(region.U0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, z), color, Up, new Vector2(region.U1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, z), color, Up, new Vector2(region.U1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, z), color, Up, new Vector2(region.U0, region.V1));
         _indices[_indexCount++] = (ushort)b;
         _indices[_indexCount++] = (ushort)(b + 1);
         _indices[_indexCount++] = (ushort)(b + 2);
@@ -152,11 +162,15 @@ public sealed class MeshBuilder
         if (len < 1e-4f) return;
 
         Vector2 n = new Vector2(-d.Y, d.X) * (width * 0.5f / len);
+        // Grass tufts are billboards too, so a line carries the same foot-depth key as a
+        // sprite. Surf and the tile grid are built with DepthZ left at 0, which is what they
+        // want (the ground and the overlay are not depth-sorted against the plants).
+        float z = DepthZ;
         int i = Reserve(4, 6);
-        _verts[i] = new TerrainVertex(new Vector3(a + n, 0f), color, Up, uv);
-        _verts[i + 1] = new TerrainVertex(new Vector3(b + n, 0f), color, Up, uv);
-        _verts[i + 2] = new TerrainVertex(new Vector3(b - n, 0f), color, Up, uv);
-        _verts[i + 3] = new TerrainVertex(new Vector3(a - n, 0f), color, Up, uv);
+        _verts[i] = new TerrainVertex(new Vector3(a + n, z), color, Up, uv);
+        _verts[i + 1] = new TerrainVertex(new Vector3(b + n, z), color, Up, uv);
+        _verts[i + 2] = new TerrainVertex(new Vector3(b - n, z), color, Up, uv);
+        _verts[i + 3] = new TerrainVertex(new Vector3(a - n, z), color, Up, uv);
         _indices[_indexCount++] = (ushort)i;
         _indices[_indexCount++] = (ushort)(i + 1);
         _indices[_indexCount++] = (ushort)(i + 2);
