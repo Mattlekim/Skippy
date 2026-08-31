@@ -31,6 +31,15 @@ public sealed class MeshBuilder
     private readonly List<ChunkMesh.Segment> _segments = new();
     private Vector2 _min, _max;
 
+    /// <summary>
+    /// The depth key written into the z of the next <see cref="Sprite"/> / <see cref="Line"/>
+    /// billboards. It carries a plant's foot iso-Y so the depth-tested draw path can resolve
+    /// the whole billboard at its foot (see <c>WorldRenderer</c>'s foliage projection); the
+    /// painter path ignores z entirely. Left at 0 for terrain and the grid, which do not want
+    /// it. Shadows keep their own lean in z (see <see cref="ShadowSprite"/>) and ignore this.
+    /// </summary>
+    public float DepthZ;
+
     public MeshBuilder(GraphicsDevice gd) => _gd = gd;
 
     public void Clear()
@@ -87,11 +96,12 @@ public sealed class MeshBuilder
     {
         Vector2 tl = pos - size * origin;
         Vector2 br = tl + size;
+        float z = DepthZ;
         int b = Reserve(4, 6);
-        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, 0f), color, Up, new Vector2(region.U0, region.V0));
-        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, 0f), color, Up, new Vector2(region.U1, region.V0));
-        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, 0f), color, Up, new Vector2(region.U1, region.V1));
-        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, 0f), color, Up, new Vector2(region.U0, region.V1));
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, z), color, Up, new Vector2(region.U0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, z), color, Up, new Vector2(region.U1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, z), color, Up, new Vector2(region.U1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, z), color, Up, new Vector2(region.U0, region.V1));
         _indices[_indexCount++] = (ushort)b;
         _indices[_indexCount++] = (ushort)(b + 1);
         _indices[_indexCount++] = (ushort)(b + 2);
@@ -99,6 +109,46 @@ public sealed class MeshBuilder
         _indices[_indexCount++] = (ushort)(b + 2);
         _indices[_indexCount++] = (ushort)(b + 3);
         Grow(tl); Grow(br);
+    }
+
+    /// <summary>
+    /// A sprite that leans with the sun: the same quad as <see cref="Sprite"/>, but with
+    /// <paramref name="lean"/> written into the vertex's otherwise unused z.
+    ///
+    /// Nothing else in the mesh uses z — everything is drawn flat — so the renderer can put
+    /// a shear in the world matrix that turns z into an offset across the ground and moves
+    /// *only* these vertices. That is what lets a plant's shadow swing round its foot as
+    /// the sun crosses the sky without a single vertex being rebuilt; see
+    /// <c>WorldRenderer.SunShear</c>. The shear flattens z back to 0 on the way through, so
+    /// these vertices still land in the orthographic projection's depth range.
+    /// </summary>
+    public void ShadowSprite(Vector2 pos, Vector2 size, Vector2 origin, in TextureAtlas.Region region, Color color, float lean)
+    {
+        Vector2 tl = pos - size * origin;
+        Vector2 br = tl + size;
+        int b = Reserve(4, 6);
+        _verts[b] = new TerrainVertex(new Vector3(tl.X, tl.Y, lean), color, Up, new Vector2(region.U0, region.V0));
+        _verts[b + 1] = new TerrainVertex(new Vector3(br.X, tl.Y, lean), color, Up, new Vector2(region.U1, region.V0));
+        _verts[b + 2] = new TerrainVertex(new Vector3(br.X, br.Y, lean), color, Up, new Vector2(region.U1, region.V1));
+        _verts[b + 3] = new TerrainVertex(new Vector3(tl.X, br.Y, lean), color, Up, new Vector2(region.U0, region.V1));
+        _indices[_indexCount++] = (ushort)b;
+        _indices[_indexCount++] = (ushort)(b + 1);
+        _indices[_indexCount++] = (ushort)(b + 2);
+        _indices[_indexCount++] = (ushort)b;
+        _indices[_indexCount++] = (ushort)(b + 2);
+        _indices[_indexCount++] = (ushort)(b + 3);
+        Grow(tl); Grow(br);
+    }
+
+    /// <summary>
+    /// Widens the bounds this mesh reports, for geometry that moves after it is built: a
+    /// shadow swung out by a low sun still has to count as visible, or its chunk is culled
+    /// while part of it is on screen.
+    /// </summary>
+    public void PadBounds(float amount)
+    {
+        _min -= new Vector2(amount);
+        _max += new Vector2(amount);
     }
 
     /// <summary>
@@ -112,11 +162,15 @@ public sealed class MeshBuilder
         if (len < 1e-4f) return;
 
         Vector2 n = new Vector2(-d.Y, d.X) * (width * 0.5f / len);
+        // Grass tufts are billboards too, so a line carries the same foot-depth key as a
+        // sprite. Surf and the tile grid are built with DepthZ left at 0, which is what they
+        // want (the ground and the overlay are not depth-sorted against the plants).
+        float z = DepthZ;
         int i = Reserve(4, 6);
-        _verts[i] = new TerrainVertex(new Vector3(a + n, 0f), color, Up, uv);
-        _verts[i + 1] = new TerrainVertex(new Vector3(b + n, 0f), color, Up, uv);
-        _verts[i + 2] = new TerrainVertex(new Vector3(b - n, 0f), color, Up, uv);
-        _verts[i + 3] = new TerrainVertex(new Vector3(a - n, 0f), color, Up, uv);
+        _verts[i] = new TerrainVertex(new Vector3(a + n, z), color, Up, uv);
+        _verts[i + 1] = new TerrainVertex(new Vector3(b + n, z), color, Up, uv);
+        _verts[i + 2] = new TerrainVertex(new Vector3(b - n, z), color, Up, uv);
+        _verts[i + 3] = new TerrainVertex(new Vector3(a - n, z), color, Up, uv);
         _indices[_indexCount++] = (ushort)i;
         _indices[_indexCount++] = (ushort)(i + 1);
         _indices[_indexCount++] = (ushort)(i + 2);
@@ -126,15 +180,23 @@ public sealed class MeshBuilder
         Grow(a); Grow(b);
     }
 
+    /// <summary>
+    /// Where the next primitive will land. Recorded before each sprite is appended, so the
+    /// finished mesh can be drawn in slices and something that moves can be drawn among its
+    /// sprites — see <see cref="ChunkMesh.Slice"/>.
+    /// </summary>
+    public ChunkMesh.Cursor Mark() => new(_segments.Count, _indexCount);
+
     /// <summary>Copies everything accumulated since <see cref="Clear"/> into GPU buffers.</summary>
-    public ChunkMesh Upload(byte neighborMask)
+    public ChunkMesh Upload(byte neighborMask, List<ChunkMesh.Slice>? slices = null)
     {
         FlushSegment();
         bool empty = _segments.Count == 0;
         var mesh = new ChunkMesh(new List<ChunkMesh.Segment>(_segments),
                                  empty ? Vector2.Zero : _min,
                                  empty ? Vector2.Zero : _max,
-                                 neighborMask);
+                                 neighborMask,
+                                 slices is null ? null : new List<ChunkMesh.Slice>(slices));
         _segments.Clear(); // ownership of the buffers has moved to the mesh
         return mesh;
     }

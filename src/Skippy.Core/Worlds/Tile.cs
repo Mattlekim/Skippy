@@ -2,7 +2,14 @@ using Microsoft.Xna.Framework;
 
 namespace Skippy.Core.Worlds;
 
-/// <summary>Biome classification, derived from temperature + moisture (+ height).</summary>
+/// <summary>
+/// Biome classification, derived from temperature + moisture (+ height).
+///
+/// There is no snow biome: snow is weather, not a place. It lies wherever the ground
+/// is below freezing (see the snow constants in <c>WorldRenderer</c>), so a tundra, a
+/// taiga or a bare mountain top all wear it when they are cold enough — and the same
+/// ground carries none of it in a warm year's climate band.
+/// </summary>
 public enum Biome : byte
 {
     Ocean,
@@ -14,10 +21,33 @@ public enum Biome : byte
     TemperateForest,
     Taiga,
     Tundra,
-    Snow,
     Jungle,
     Swamp,
     Rock,
+}
+
+public static class BiomeNames
+{
+    /// <summary>
+    /// Short upper-case label for the debug read-out. Upper case because the read-out's
+    /// 3×5 font has no lower case, and short because the two-word names do not fit
+    /// beside the numbers.
+    /// </summary>
+    public static string Name(this Biome biome) => biome switch
+    {
+        Biome.Ocean => "OCEAN",
+        Biome.ShallowWater => "SHALLOWS",
+        Biome.Beach => "BEACH",
+        Biome.Grassland => "GRASSLAND",
+        Biome.Savanna => "SAVANNA",
+        Biome.Desert => "DESERT",
+        Biome.TemperateForest => "FOREST",
+        Biome.Taiga => "TAIGA",
+        Biome.Tundra => "TUNDRA",
+        Biome.Jungle => "JUNGLE",
+        Biome.Swamp => "SWAMP",
+        _ => "ROCK",
+    };
 }
 
 /// <summary>What (if anything) grows on a tile. Chosen from biome + climate.</summary>
@@ -67,9 +97,7 @@ public struct Tile
     public readonly bool IsWater => Biome is Biome.Ocean or Biome.ShallowWater;
 
     /// <summary>Temperature expressed in degrees Celsius (from the normalized 0..1 field).</summary>
-    public readonly float TemperatureCelsius =>
-        WorldConstants.TempMinCelsius
-        + Temperature * (WorldConstants.TempMaxCelsius - WorldConstants.TempMinCelsius);
+    public readonly float TemperatureCelsius => WorldConstants.Celsius(Temperature);
 }
 
 /// <summary>Tunable constants for terrain shaping and the isometric look.</summary>
@@ -90,18 +118,8 @@ public static class WorldConstants
     /// <summary>Narrow band just above the sea that renders as beach.</summary>
     public const float BeachBand = 0.03f;
 
-    /// <summary>
-    /// How wide a river channel is, in tiles. Mutable so it can be tuned in game
-    /// (`,` / `.`); chunks already generated keep the width they were carved at
-    /// until the world is regenerated.
-    /// </summary>
-    public static float RiverWidth = 2.5f;
-
-    public const float MinRiverWidth = 1f;
-    public const float MaxRiverWidth = 12f;
-
-    /// <summary>Above this normalized height, land becomes rock/snow regardless of climate.</summary>
-    public const float SnowLine = 0.78f;
+    /// <summary>Above this normalized height, land is bare rock regardless of climate.</summary>
+    public const float RockLine = 0.78f;
 
     /// <summary>
     /// How strongly altitude cools temperature (per unit of height above sea).
@@ -109,8 +127,8 @@ public static class WorldConstants
     /// Kept gentle on purpose. At 0.9 the cooling was an order of magnitude larger
     /// than the temperature field's own variation, so altitude decided the climate
     /// on its own: a third of all land clamped to freezing and the map was nothing
-    /// but taiga and tundra. Snow-capped peaks don't depend on this anyway —
-    /// <see cref="SnowLine"/> caps high ground regardless of climate.
+    /// but taiga and tundra. It is still what makes a peak colder than the country
+    /// it stands in, and so what puts snow on it.
     /// </summary>
     public const float TemperatureLapse = 0.25f;
 
@@ -125,4 +143,12 @@ public static class WorldConstants
     /// </summary>
     public const float TempMinCelsius = -6f;
     public const float TempMaxCelsius = 45f;
+
+    /// <summary>The normalized 0..1 temperature field in degrees Celsius.</summary>
+    public static float Celsius(float temperature)
+        => TempMinCelsius + temperature * (TempMaxCelsius - TempMinCelsius);
+
+    /// <summary>The temperature field value that a temperature in degrees Celsius sits at.</summary>
+    public static float Normalized(float celsius)
+        => (celsius - TempMinCelsius) / (TempMaxCelsius - TempMinCelsius);
 }

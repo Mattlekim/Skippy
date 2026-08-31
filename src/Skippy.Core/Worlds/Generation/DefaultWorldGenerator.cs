@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using Microsoft.Xna.Framework;
 using Skippy.Core.Worlds.Noise;
 
 namespace Skippy.Core.Worlds.Generation;
@@ -25,8 +23,12 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private readonly PerlinNoise _patch;
     private readonly PerlinNoise _mountains;
     private readonly PerlinNoise _coast;
-    private readonly RiverNetwork _rivers;
-    private readonly List<RiverNetwork.RiverPath> _riverScratch = new();
+
+    /// <summary>
+    /// The world's dials, held live rather than copied: the settings panel turns them and
+    /// asks the world to regenerate, and the next chunk built reads the new ones.
+    /// </summary>
+    private readonly WorldSettings _settings;
 
     // Lower = larger features. Height varies fastest; temperature the slowest
     // so climate bands are broad and biomes form coherent regions.
@@ -54,8 +56,11 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     /// </summary>
     private const float PatchScale = 0.22f;
 
-    public DefaultWorldGenerator(int seed)
+    public DefaultWorldGenerator(int seed) : this(seed, new WorldSettings()) { }
+
+    public DefaultWorldGenerator(int seed, WorldSettings settings)
     {
+        _settings = settings;
         _height = new PerlinNoise(seed);
         _temperature = new PerlinNoise(seed * 31 + 7);
         _moisture = new PerlinNoise(seed * 17 + 91);
@@ -63,7 +68,6 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         _patch = new PerlinNoise(seed * 13 + 41);
         _mountains = new PerlinNoise(seed * 101 + 5);
         _coast = new PerlinNoise(seed * 211 + 13);
-        _rivers = new RiverNetwork(seed, HeightAt);
     }
 
     // ---- mountains ---------------------------------------------------------
@@ -84,12 +88,15 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
     private const float MountainHeight = 0.42f;
 
     /// <summary>
-    /// Terrain height with mountain uplift folded in — the one field both the world
-    /// and its rivers are built from, so they agree on where the high ground is.
+    /// Terrain height with mountain uplift folded in — the one field the whole world is
+    /// built from, so everything reading it agrees on where the high ground is.
     /// </summary>
     private float TerrainHeight(int wx, int wy)
     {
-        float h = ShapeHeight(_height.Fractal01(wx * HeightScale, wy * HeightScale, octaves: 5));
+        // The world's age weathers the land before anything is built on it, so everything
+        // downstream follows from it: an old world's ground rarely climbs to the mountain
+        // foot, so it grows fewer ranges as well as lower ones.
+        float h = Weather(ShapeHeight(_height.Fractal01(wx * HeightScale, wy * HeightScale, octaves: 5)));
         float inRange = Smooth01((_mountains.Fractal01(wx * MountainScale, wy * MountainScale, octaves: 4)
                                   - MountainThreshold) / MountainBand);
         float highland = Smooth01((h - MountainFoot) / 0.25f);
@@ -98,8 +105,27 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         // rock-baring faces the renderer draws as cliffs. Squared to sharpen them.
         float ridged = Ridged(wx * RidgeScale, wy * RidgeScale, octaves: 4);
         ridged *= ridged;
-        h = Clamp01(h + MountainHeight * inRange * highland * ridged);
+        h = Clamp01(h + MountainHeight * _settings.MountainUplift * inRange * highland * ridged);
         return ErodeCoast(wx, wy, h);
+    }
+
+    /// <summary>
+    /// Ages the land: a curve on how far up from sea level the ground stands, so an old
+    /// world's hills have been worn down into plains and a young one's slopes stand as
+    /// highland. See <see cref="WorldSettings.ReliefGamma"/> for why it is a curve on the
+    /// land fraction rather than a multiplier on the height.
+    ///
+    /// The sea floor is left alone — how deep the water is under its own surface is not what
+    /// "hilly" means, and the shore is drawn from the waterline either way.
+    /// </summary>
+    private float Weather(float h)
+    {
+        float gamma = _settings.ReliefGamma;
+        if (gamma == 1f || h <= WorldConstants.SeaLevel)
+            return h;
+
+        float land = (h - WorldConstants.SeaLevel) / (1f - WorldConstants.SeaLevel);
+        return WorldConstants.SeaLevel + MathF.Pow(land, gamma) * (1f - WorldConstants.SeaLevel);
     }
 
     // ---- coastal erosion ---------------------------------------------------
@@ -138,9 +164,6 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         }
         return sum / norm;
     }
-
-    /// <summary>The terrain height at a world tile — the field rivers run down.</summary>
-    private float HeightAt(int wx, int wy) => TerrainHeight(wx, wy);
 
     /// <summary>
     /// The final coastal cleanup: after the meander has carved the shore, a lone land
@@ -181,8 +204,13 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
 
                 float h = CleanCoast(wx, wy);
 
-                float baseTemp = Spread(_temperature.Fractal01(wx * TemperatureScale, wy * TemperatureScale, ClimateOctaves));
-                float moisture = Spread(_moisture.Fractal01(wx * MoistureScale, wy * MoistureScale, ClimateOctaves));
+                // The world's climate dials go in here, on the raw noise, before it is
+                // spread across 0..1 — see <see cref="WorldSettings"/> for why they are
+                // not applied to the finished field.
+                float baseTemp = Spread(_temperature.Fractal01(wx * TemperatureScale, wy * TemperatureScale, ClimateOctaves)
+                                        + _settings.TemperatureBias);
+                float moisture = Spread(_moisture.Fractal01(wx * MoistureScale, wy * MoistureScale, ClimateOctaves)
+                                        + _settings.MoistureBias);
 
                 // Altitude cooling: only land above the sea gets colder with height.
                 float aboveSea = MathF.Max(0f, h - WorldConstants.SeaLevel);
@@ -211,64 +239,7 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
             }
         }
 
-        CarveRivers(chunk);
         chunk.Generated = true;
-    }
-
-    /// <summary>
-    /// Stamps in every river crossing this chunk, after the climate pass — a river
-    /// is a path across tiles, so it cannot be decided one tile at a time.
-    /// </summary>
-    private void CarveRivers(Chunk chunk)
-    {
-        float half = WorldConstants.RiverWidth * 0.5f;
-        int reach = (int)MathF.Ceiling(half);
-
-        _riverScratch.Clear();
-        _rivers.Collect(chunk.OriginX - reach, chunk.OriginY - reach,
-                        chunk.OriginX + Chunk.Size + reach, chunk.OriginY + Chunk.Size + reach,
-                        _riverScratch);
-
-        float halfSq = half * half;
-        foreach (RiverNetwork.RiverPath path in _riverScratch)
-        {
-            foreach (Vector2 point in path.Points)
-            {
-                int px = (int)point.X, py = (int)point.Y;
-                for (int dy = -reach; dy <= reach; dy++)
-                {
-                    for (int dx = -reach; dx <= reach; dx++)
-                    {
-                        if (dx * dx + dy * dy > halfSq)
-                            continue; // keep the channel round, not square
-
-                        int lx = px + dx - chunk.OriginX;
-                        int ly = py + dy - chunk.OriginY;
-                        if (lx < 0 || ly < 0 || lx >= Chunk.Size || ly >= Chunk.Size)
-                            continue;
-
-                        ref Tile t = ref chunk.TileAt(lx, ly);
-                        if (t.IsWater)
-                            continue; // already sea
-
-                        // A river runs along the ground it crosses; it does not drop
-                        // to sea level. Cutting the bed to level 0 put a channel
-                        // hundreds of pixels below its own banks, and the shared
-                        // corner vertices stretched the quads into spikes.
-                        // The bed sits a riverbed's depth below the banks; the rest of
-                        // the terrain keeps its shape and the water descends with it.
-                        // In the now four-times-finer levels that depth is a few steps,
-                        // not one, so the channel stays as deep as it always was.
-                        t.Level -= (byte)Math.Min(t.Level, RiverbedDepth);
-
-                        t.Height = MathF.Max(WorldConstants.SeaLevel, t.Height - 0.01f);
-                        t.Moisture = Clamp01(t.Moisture + 0.25f);
-                        t.Biome = Biome.ShallowWater;
-                        t.Vegetation = Vegetation.None;
-                    }
-                }
-            }
-        }
     }
 
     /// <summary>
@@ -287,14 +258,11 @@ public sealed class DefaultWorldGenerator : IWorldGenerator
         => 1f / (1f + MathF.Exp(-1.702f * (v - 0.5f) / ClimateSigma));
 
     /// <summary>Standard deviation of the raw fBm climate fields, measured over land.</summary>
-    private const float ClimateSigma = 0.10f;
+    internal const float ClimateSigma = 0.10f;
 
     /// <summary>How much damper ground at the water table is, and the height band it fades over.</summary>
     private const float CoastalDamp = 0.30f;
     private const float DampBand = 0.07f;
-
-    /// <summary>Elevation steps a river cuts below its banks (scaled with the level count).</summary>
-    private const byte RiverbedDepth = 4;
 
     /// <summary>Clamped smoothstep, so a blend has no hard edge where it begins or ends.</summary>
     private static float Smooth01(float t)
