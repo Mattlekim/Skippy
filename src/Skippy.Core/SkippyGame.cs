@@ -6,6 +6,7 @@ using Microsoft.Xna.Framework.Graphics;
 using Skippy.Core.Diagnostics;
 using Skippy.Core.Input;
 using Skippy.Core.Worlds;
+using Skippy.Core.Worlds.Generation;
 using Skippy.Core.Worlds.Mobs;
 using Skippy.Core.Worlds.Rendering;
 
@@ -106,7 +107,10 @@ public class SkippyGame : Game
 
     protected override void Draw(GameTime gameTime)
     {
-        GraphicsDevice.Clear(_world.Sky.SkyColor);
+        // Black, not the sky's colour: the world has ends now (see WorldBounds), and past
+        // a pole there is nothing — not unlit sky, nothing. The sky still colours the
+        // light falling on the world itself.
+        GraphicsDevice.Clear(Color.Black);
         _world.Draw(_spriteBatch, GraphicsDevice);
         DrawHud();
         _settings.Draw(_spriteBatch, GraphicsDevice.Viewport);
@@ -141,10 +145,14 @@ public class SkippyGame : Game
         // it is actually over the world before reading a tile off it.
         if (_input.PointerPosition is Vector2 pointer
             && viewport.Bounds.Contains((int)pointer.X, (int)pointer.Y)
-            && _world.TryGetTileAtScreen(pointer, viewport, out Tile hovered, out Point at))
+            && _world.TryGetTileAtScreen(pointer, viewport, out Tile hovered, out Point at)
+            && !hovered.IsVoid)
         {
             _hudLines.Add("AT " + Coords(at.X, at.Y));
+            _hudLines.Add("LAT " + Percent(_world.Bounds.Latitude(WorldBounds.V(at.X, at.Y))));
             _hudLines.Add("BIO " + hovered.Biome.Name());
+            if (Forests.Wooded(hovered.Biome))
+                _hudLines.Add("WOOD " + hovered.Forest.Name());
             _hudLines.Add("HGT " + Percent(hovered.Height));
             _hudLines.Add("TMP " + (int)MathF.Round(hovered.TemperatureCelsius) + "C");
             _hudLines.Add("WET " + Percent(hovered.Moisture));

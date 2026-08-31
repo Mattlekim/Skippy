@@ -75,19 +75,24 @@ For running the game *natively* on the phone, use the Android build.
 
 ## World engine
 
-Skippy is an isometric, Age-of-Empires-II-style world: chunked and effectively
-**infinite**, with stepped terrain **height**, **biomes** derived from temperature
-and moisture (and **height cools temperature**, so mountains turn cold), and
+Skippy is an isometric, Age-of-Empires-II-style **planet**: a chunk-streamed band
+that **wraps east–west** — walk far enough one way and the same ground comes back
+round, with no seam, because the generator's every field is periodic around the
+world — and has **poles** north and south with black beyond them. Climate is
+banded by **latitude** the way Earth's is: hot equator, frozen caps, and the
+deserts in the subtropical belt where the real ones sit. On top of that, stepped
+terrain **height** (which **cools temperature**, so mountains turn cold) and
 **vegetation** that follows the climate.
 
 ![Skippy world](docs/world-preview.png)
 
 It's built around a `World` base class that owns the whole map — its generator,
-loaded chunks, camera, and its own update + render. The full design (chunk
-streaming, the climate/biome model, the isometric renderer, and how to extend it)
-is in **[docs/WORLD.md](docs/WORLD.md)**. Controls: arrows/WASD or drag to pan,
-mouse wheel to zoom, TAB for the settings panel (time of day, map view, tile size,
-zoom, grid), `,` / `.` to wind the clock, and M to cycle the map view directly.
+loaded chunks, camera, and its own update + render. The full design (the wrap and
+the poles, chunk streaming, the climate/biome model, the isometric renderer, and
+how to extend it) is in **[docs/WORLD.md](docs/WORLD.md)**. Controls: arrows/WASD
+or drag to pan, mouse wheel to zoom, TAB for the settings panel (world size, time
+of day, map view, tile size, zoom, grid), `,` / `.` to wind the clock, and M to
+cycle the map view directly.
 
 ## Claude Code on the web
 

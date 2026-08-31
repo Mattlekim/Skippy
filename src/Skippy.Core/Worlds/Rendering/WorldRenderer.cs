@@ -313,7 +313,14 @@ public sealed class WorldRenderer : IDisposable
         /// <summary>How much snow lies on this plant's crown, 0..1 — from the climate at its foot.</summary>
         public readonly float Snow;
 
-        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed, float snow)
+        /// <summary>
+        /// Which of its kind's painted forms the wood around this tree is grown from, 0..1
+        /// (<see cref="Tile.ForestVariant"/>), or <see cref="NoVariant"/> for a plant that
+        /// belongs to no stand and is simply rolled at random.
+        /// </summary>
+        public readonly float Variant;
+
+        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed, float snow, float variant)
         {
             Pos = pos;
             Veg = veg;
@@ -321,6 +328,7 @@ public sealed class WorldRenderer : IDisposable
             Dead = dead;
             Seed = seed;
             Snow = snow;
+            Variant = variant;
         }
     }
 
@@ -544,8 +552,13 @@ public sealed class WorldRenderer : IDisposable
         // only in the game view, where they belong (the data views stay unclouded).
         if (world.MapView == MapView.Biome)
         {
-            _clouds.DrawShadows(gd, focusIso, center, zoom, world.Sky);
-            _clouds.DrawClouds(gd, focusIso, center, zoom, world.Sky);
+            // The poles, in iso space. A row of the world is a line of constant x + y,
+            // and Iso maps that straight to iso Y, so the whole band is the strip
+            // between these two — which is what the sheet is cut to.
+            float isoTop = Iso.TileToIso(0, 0, 0f).Y;
+            float isoBottom = Iso.TileToIso(world.Bounds.Span, 0, 0f).Y;
+            _clouds.DrawShadows(gd, focusIso, center, zoom, world.Sky, isoTop, isoBottom);
+            _clouds.DrawClouds(gd, focusIso, center, zoom, world.Sky, isoTop, isoBottom);
         }
     }
 
@@ -914,6 +927,13 @@ public sealed class WorldRenderer : IDisposable
             {
                 ref Tile tile = ref chunk.TileAt(lx, ly);
                 int tx = ox + lx, ty = oy + ly;
+
+                // Past a pole there is no world to draw — the black shows through. The
+                // tile still exists and still holds real terrain, so its neighbour inside
+                // the world is shaped and lit against genuine ground; it simply stops
+                // here, on the edge of its own diamond.
+                if (tile.IsVoid)
+                    continue;
 
                 Vector2 a = CornerPos(world, tx, ty);
                 Vector2 b = CornerPos(world, tx + 1, ty);
@@ -1664,6 +1684,7 @@ public sealed class WorldRenderer : IDisposable
     {
         8,  // Ocean
         9,  // ShallowWater
+        9,  // Lake → shallow water: a lake is never the deep blue of open sea
         4,  // Beach → sand
         0,  // Grassland → grass
         3,  // Savanna → dry grass
@@ -1954,11 +1975,21 @@ public sealed class WorldRenderer : IDisposable
                 int vx = ox + lx, vy = oy + ly;
                 Vector2 p = CornerPos(world, vx, vy);
 
-                if (lx < Chunk.Size && !(ly == Chunk.Size && southLoaded))
-                    _builder.Line(p, CornerPos(world, vx + 1, vy), GridLineWidth, GridColor, uv);
+                // An edge is drawn only if one of the two tiles it divides is in the
+                // world, or the grid would go on being ruled across the black.
+                WorldBounds bounds = world.Bounds;
 
-                if (ly < Chunk.Size && !(lx == Chunk.Size && eastLoaded))
+                if (lx < Chunk.Size && !(ly == Chunk.Size && southLoaded)
+                    && (bounds.Contains(vx, vy - 1) || bounds.Contains(vx, vy)))
+                {
+                    _builder.Line(p, CornerPos(world, vx + 1, vy), GridLineWidth, GridColor, uv);
+                }
+
+                if (ly < Chunk.Size && !(lx == Chunk.Size && eastLoaded)
+                    && (bounds.Contains(vx - 1, vy) || bounds.Contains(vx, vy)))
+                {
                     _builder.Line(p, CornerPos(world, vx, vy + 1), GridLineWidth, GridColor, uv);
+                }
             }
         }
 
@@ -2122,7 +2153,9 @@ public sealed class WorldRenderer : IDisposable
     /// </summary>
     private void CollectShore(World world, in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty)
     {
-        if (!tile.IsWater)
+        // Only the sea breaks on its shore. A lake has no swell behind it to break with,
+        // so its edge is left as still water meeting the bank.
+        if (!tile.IsSea)
             return;
 
         Vector2 middle = (a + b + c + d) * 0.25f;
@@ -2199,13 +2232,26 @@ public sealed class WorldRenderer : IDisposable
     /// The counts below are authored per <see cref="Iso.BaseTileWidth"/> tile and
     /// multiplied by the tile's area, because plants keep their own absolute size
     /// however big the tile is: a wider tile is more ground, so more of them fit.
+    ///
+    /// The biome decides how many trees; it does not decide which. That is the wood the
+    /// tile stands in (see <see cref="Forests"/>) — so one temperate forest comes up
+    /// evergreen and the next one over comes up broadleaf, off the same case below.
     /// </summary>
     private void AppendScatter(World world, in Tile tile, Vector2 a, Vector2 b, Vector2 c, Vector2 d, int tx, int ty,
                                int ox, int oy, int lx, int ly, bool shore)
     {
-        var rng = new XorShift((uint)((tx * 73856093) ^ (ty * 19349663) ^ 0x9e37));
+        // Seeded from the tile's canonical position, not its raw one, so a wood looks the
+        // same tree for tree on every lap round the world (see WorldBounds.Canonical).
+        world.Bounds.Canonical(tx, ty, out int hx, out int hy);
+        var rng = new XorShift((uint)((hx * 73856093) ^ (hy * 19349663) ^ 0x9e37));
         float dens = tile.VegetationDensity;
         float area = Iso.TileAreaScale;
+
+        // The wood this tile stands in: which tree owns it, and which painted form of that
+        // tree it is grown from. Held as locals because the scatter's inner functions read
+        // them, and an `in` parameter cannot be captured.
+        ForestKind forest = tile.Forest;
+        float forestVariant = tile.ForestVariant;
         bool couldSnow = tile.TemperatureCelsius < SnowGateCelsius;
         float waterLevel = 0f;
         if (shore)
@@ -2259,8 +2305,20 @@ public sealed class WorldRenderer : IDisposable
                 if (couldSnow)
                     snow = Smoothstep01(SnowCover(ox, oy, lx + u, ly + v) * (0.7f + 0.6f * rng.Next()) * SnowCanopy);
 
-                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits(), snow));
+                _veg.Add(new VegItem(Bilerp(a, b, c, d, u, v), kind, s, dead, rng.NextBits(), snow,
+                                     IsTree(kind) ? forestVariant : NoVariant));
             }
+        }
+
+        // A wood is not an even mix of what will grow in it: one tree has the canopy and
+        // a second grows through it in smaller numbers. Splitting the tile's whole tree
+        // budget between the two by share is what holds that proportion however thickly
+        // the tile happens to be planted.
+        void AddTrees(float rate, float deadChance)
+        {
+            Forests.Mix(forest, out Vegetation primary, out Vegetation secondary, out float share);
+            Add(primary, rate * share, deadChance);
+            Add(secondary, rate * (1f - share), deadChance);
         }
 
         // The dead-chance argument is how many of a kind come up as bare wood. Standing
@@ -2269,34 +2327,34 @@ public sealed class WorldRenderer : IDisposable
         switch (tile.Biome)
         {
             case Biome.TemperateForest:
-                Add(Vegetation.BroadleafTree, 5 + Ri(dens * 6), deadChance: 0.07f);
+                AddTrees(5 + Ri(dens * 6), deadChance: 0.07f);
                 Add(Vegetation.Bush, Ri(dens * 2));
                 Add(Vegetation.Rock, RockRateForest);
                 break;
             case Biome.Taiga:
-                Add(Vegetation.PineTree, 5 + Ri(dens * 6), deadChance: 0.10f);
+                AddTrees(5 + Ri(dens * 6), deadChance: 0.10f);
                 // Undergrowth is sparse in the cold: only the odd frost-bitten shrub.
                 if (rng.Next() > 0.9f) Add(Vegetation.Bush, 1, deadChance: 0.5f);
                 Add(Vegetation.Rock, RockRateForest);
                 break;
             case Biome.Jungle:
-                Add(Vegetation.PalmTree, 6 + Ri(dens * 6), deadChance: 0.04f);
+                AddTrees(6 + Ri(dens * 6), deadChance: 0.04f);
                 Add(Vegetation.Bush, 1 + Ri(dens * 2));
                 break;
             case Biome.Grassland:
                 // A lone tree here and there across open grass, thickening into light
                 // woodland where the clumping field peaks. This used to be a hard
                 // switch at dens 0.5 — half the grassland bare, half of it a forest.
-                Add(Vegetation.BroadleafTree, 0.05f + 0.7f * MathF.Max(0f, dens - 0.5f), deadChance: 0.09f);
+                AddTrees(0.05f + 0.7f * MathF.Max(0f, dens - 0.5f), deadChance: 0.09f);
                 if (dens > 0.35f && rng.Next() > 0.5f) Add(Vegetation.Bush, 1);
                 Add(Vegetation.Rock, RockRateGrassland);
                 break;
             case Biome.Savanna:
-                if (dens > 0.55f) Add(Vegetation.BroadleafTree, dens > 0.8f ? 2 : 1, deadChance: 0.18f);
+                if (dens > 0.55f) AddTrees(dens > 0.8f ? 2 : 1, deadChance: 0.18f);
                 break;
             case Biome.Swamp:
                 Add(Vegetation.Bush, 1 + Ri(dens * 3), deadChance: 0.25f);
-                if (dens > 0.6f) Add(Vegetation.BroadleafTree, 1, deadChance: 0.30f);
+                if (dens > 0.6f) AddTrees(1, deadChance: 0.30f);
                 break;
             case Biome.Tundra:
                 // Nothing up here keeps a leaf: tundra scrub is bare twigs, always —
@@ -2556,9 +2614,13 @@ public sealed class WorldRenderer : IDisposable
         foreach (Mob mob in world.Mobs)
         {
             // Ground that has streamed out is ground we can't put feet on: it would read
-            // as level 0 and the mob would hang in the air over nothing.
-            if (!world.TryGetTile((int)MathF.Floor(mob.Position.X), (int)MathF.Floor(mob.Position.Y), out _))
+            // as level 0 and the mob would hang in the air over nothing. Ground past a
+            // pole is not drawn at all, so nothing standing on it is either.
+            if (!world.TryGetTile((int)MathF.Floor(mob.Position.X), (int)MathF.Floor(mob.Position.Y), out Tile under)
+                || under.IsVoid)
+            {
                 continue;
+            }
 
             Vector2 foot = Iso.TileToIso(mob.Position.X, mob.Position.Y,
                                          SurfaceLevel(world, mob.Position.X, mob.Position.Y));
@@ -2798,17 +2860,17 @@ public sealed class WorldRenderer : IDisposable
                 break;
 
             case Vegetation.PineTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Conifers, TreeHeight, item.Snow, ref rng);
+                Tree(at, s, item, _atlas.Conifers, TreeHeight, ref rng);
                 break;
 
             case Vegetation.BroadleafTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Broadleaves, TreeHeight, item.Snow, ref rng);
+                Tree(at, s, item, _atlas.Broadleaves, TreeHeight, ref rng);
                 break;
 
             // Palms stand taller than the broadleaves beside them — they are mostly
             // trunk, so drawn to the same height their crowns come out tiny.
             case Vegetation.PalmTree:
-                Plant(at, s, item.Dead ? _atlas.DeadTrees : _atlas.Palms, TreeHeight * PalmHeight, item.Snow, ref rng);
+                Tree(at, s, item, _atlas.Palms, TreeHeight * PalmHeight, ref rng);
                 break;
 
             case Vegetation.Cactus: Cactus(at, s, ref rng); break;
@@ -2817,17 +2879,31 @@ public sealed class WorldRenderer : IDisposable
     }
 
     /// <summary>
-    /// Draws one painted plant: a single quad standing on its own base, at a height
-    /// in iso pixels with the art's own proportions. Which of the sheet's variants
-    /// it gets comes from the plant's seed, so a wood is a mix rather than one tree
-    /// stamped over and over.
+    /// One tree, drawn from the stock of the wood it stands in. A living tree mostly takes
+    /// the form its stand is grown from, so a wood comes out as one recognisable tree with
+    /// a few others among it rather than a bag of everything on the sheet; standing
+    /// deadwood is bare either way, and is rolled at random.
     /// </summary>
-    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.PlantArt> set, float height, float snow, ref XorShift rng)
+    private void Tree(Vector2 at, float s, in VegItem item, IReadOnlyList<TextureAtlas.PlantArt> set,
+                      float height, ref XorShift rng)
+    {
+        if (item.Dead)
+            Plant(at, s, _atlas.DeadTrees, height, item.Snow, ref rng);
+        else
+            Plant(at, s, set, height, item.Snow, ref rng, item.Variant);
+    }
+
+    /// <summary>
+    /// Draws one painted plant: a single quad standing on its own base, at a height
+    /// in iso pixels with the art's own proportions.
+    /// </summary>
+    private void Plant(Vector2 at, float s, IReadOnlyList<TextureAtlas.PlantArt> set, float height, float snow,
+                       ref XorShift rng, float variant = NoVariant)
     {
         if (set.Count == 0)
             return;
 
-        TextureAtlas.PlantArt plant = set[(int)(rng.Next() * set.Count) % set.Count];
+        TextureAtlas.PlantArt plant = set[Form(set.Count, variant, ref rng)];
         float h = height * s * (0.85f + 0.3f * rng.Next());
         var size = new Vector2(h * plant.Art.Aspect, h);
 
@@ -2837,6 +2913,29 @@ public sealed class WorldRenderer : IDisposable
         if (snow > 0.02f)
             SnowCap(at, size, plant, snow, ref rng);
     }
+
+    /// <summary>
+    /// Which piece of a kind's art one plant is drawn as. With no stand behind it that is a
+    /// straight roll over the sheet — a bush is a bush. A tree standing in a wood mostly
+    /// takes the wood's own form instead: <paramref name="variant"/> is the stand's slot in
+    /// the species field, mapped onto the sheet, so every wood is made of one tree; the
+    /// rolls that go the other way leave the rest of the sheet scattered thinly through it,
+    /// which is what keeps a stand from looking stamped.
+    /// </summary>
+    private static int Form(int count, float variant, ref XorShift rng)
+    {
+        float pick = variant >= 0f && rng.Next() < StandPurity ? variant : rng.Next();
+        return Math.Min((int)(pick * count), count - 1);
+    }
+
+    /// <summary>
+    /// How much of a wood is the one tree it is grown from. High enough that the stand
+    /// reads as that tree at a glance, low enough that every few trees is something else.
+    /// </summary>
+    private const float StandPurity = 0.78f;
+
+    /// <summary>A plant that belongs to no stand, and so takes its form at random.</summary>
+    private const float NoVariant = -1f;
 
     /// <summary>
     /// Lays snow over a plant, as one white quad drawn over it at exactly its own size and

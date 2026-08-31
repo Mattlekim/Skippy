@@ -1127,9 +1127,4 @@ public sealed class TextureAtlas : IDisposable
         float du = (u - cu) / ru, dv = (v - cv) / rv;
         return du * du + dv * dv <= 1f;
     }
-
-    private static Color Mix(Color a, Color b, float t) => new(
-        (int)(a.R + (b.R - a.R) * t),
-        (int)(a.G + (b.G - a.G) * t),
-        (int)(a.B + (b.B - a.B) * t));
 }

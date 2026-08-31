@@ -202,17 +202,18 @@ public abstract class Mob
     }
 
     /// <summary>
-    /// Is there ground here a mob could be standing on? False over water, and false over
-    /// chunks that aren't loaded — out there nothing is known yet, and a mob that walked
-    /// off into it could surface in the middle of an ocean once it generated.
+    /// Is there ground here a mob could be standing on? False over water, false past a
+    /// pole where there is no world, and false over chunks that aren't loaded — out there
+    /// nothing is known yet, and a mob that walked off into it could surface in the middle
+    /// of an ocean once it generated.
     /// </summary>
     public static bool CanStand(World world, Vector2 at)
-        => TryTile(world, at, out Tile tile) && !tile.IsWater;
+        => TryTile(world, at, out Tile tile) && !tile.IsWater && !tile.IsVoid;
 
     /// <summary>As <see cref="CanStand"/>, plus that the climb from where it is now is walkable.</summary>
     private static bool CanWalk(World world, Vector2 from, Vector2 to)
     {
-        if (!TryTile(world, to, out Tile there) || there.IsWater)
+        if (!TryTile(world, to, out Tile there) || there.IsWater || there.IsVoid)
             return false;
 
         // Standing on ground we can't read (it just unloaded underfoot) is no reason to

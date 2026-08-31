@@ -67,6 +67,9 @@ public static class BiomeRegistry
     {
         Biome.Ocean           => new Color(28, 58, 110),
         Biome.ShallowWater    => new Color(52, 110, 170),
+        // A lake is greener and calmer than the sea: still water over a silty bed,
+        // not the blue of open ocean.
+        Biome.Lake            => new Color(58, 122, 148),
         Biome.Beach           => new Color(214, 196, 140),
         Biome.Grassland       => new Color(112, 158, 74),
         Biome.Savanna         => new Color(170, 168, 86),

@@ -53,6 +53,13 @@ public class World
     /// </summary>
     public WorldSettings Settings { get; } = new();
 
+    /// <summary>
+    /// Where the world ends and where it comes back round — the band it is cut from, from
+    /// the size dial. See <see cref="WorldBounds"/>: it has poles north and south, and no
+    /// edges at all east and west.
+    /// </summary>
+    public WorldBounds Bounds => Settings.Bounds;
+
     protected IWorldGenerator Generator { get; }
 
     private readonly Dictionary<ChunkCoord, Chunk> _chunks = new();
@@ -91,6 +98,10 @@ public class World
         Seed = seed;
         Generator = CreateGenerator(seed);
         _mobSeeds = new Random(seed);
+
+        // Open on the equator. (0,0) is a corner of the map — the north pole — and a world
+        // that started there would start at its edge, looking half into the black.
+        Camera.FocusTile = Bounds.Equator;
     }
 
     /// <summary>Override to plug in a custom terrain generator. <see cref="Settings"/> is already built.</summary>
@@ -185,6 +196,11 @@ public class World
         if (input.ScrollDelta > 0) Camera.ZoomBy(1.1f);
         else if (input.ScrollDelta < 0) Camera.ZoomBy(1f / 1.1f);
 
+        // The world has ends north and south, so the camera does too. East and west it
+        // has none: the ground simply keeps coming round, and the coordinates keep
+        // counting up with it.
+        Camera.FocusTile = Bounds.ClampFocus(Camera.FocusTile);
+
         StreamChunks();
 
         // After the streaming, always: a mob asks the world what it may walk onto, and
@@ -264,7 +280,7 @@ public class World
                     if (r > 0 && Math.Abs(x - cx) != r && Math.Abs(y - cy) != r)
                         continue;
 
-                    if (TryGetTile(x, y, out Tile tile) && !tile.IsWater)
+                    if (TryGetTile(x, y, out Tile tile) && !tile.IsWater && !tile.IsVoid)
                     {
                         found = new Vector2(x + 0.5f, y + 0.5f);
                         return true;
@@ -344,12 +360,28 @@ public class World
     /// The mobs go with it. They were put down on ground that is about to be replaced,
     /// and a flock left standing where a coastline used to be would be grazing the sea.
     /// </remarks>
+    /// <summary>
+    /// Puts the camera back on the equator. For when the world changes size under it: the
+    /// old position means nothing on a planet of a different size, and a lap east is a
+    /// different distance now.
+    /// </summary>
+    public void CenterOnEquator() => Camera.FocusTile = Bounds.Equator;
+
     public void Regenerate()
     {
+        // The generator remembers things about the ground it has built that a position
+        // alone cannot answer — which water is a lake, for one — and that ground is about
+        // to change under it.
+        Generator.Reset();
+
         _chunks.Clear();
         _mobs.Clear();
         SelectedMob = null;
         _flockSpawned = false;
+
+        // The size dial is one of the things that gets here, and a smaller world may have
+        // no ground left where the camera was standing.
+        Camera.FocusTile = Bounds.ClampFocus(Camera.FocusTile);
 
         // The renderer caches a mesh per chunk *coordinate*, and regeneration hands those
         // same coordinates back — so without this it would go on drawing the old ground,
@@ -365,7 +397,13 @@ public class World
 
         for (int cy = -LoadRadius; cy <= LoadRadius; cy++)
             for (int cx = -LoadRadius; cx <= LoadRadius; cx++)
-                GetChunk(new ChunkCoord(fcx + cx, fcy + cy));
+            {
+                var coord = new ChunkCoord(fcx + cx, fcy + cy);
+                if (IsChunkBeyondThePoles(coord))
+                    continue;
+
+                GetChunk(coord);
+            }
 
         _unloadScratch.Clear();
         foreach (KeyValuePair<ChunkCoord, Chunk> kv in _chunks)
@@ -407,6 +445,22 @@ public class World
     {
         Vector2 iso = screenDelta / Camera.Zoom;
         return Iso.IsoToTile(iso.X, iso.Y);
+    }
+
+    /// <summary>
+    /// Whether a chunk lies so far past a pole that not one tile of it could matter.
+    ///
+    /// The poles run diagonally across the chunk grid (they are lines of x + y), so a
+    /// chunk near one holds tiles on both sides of it and has to be built. The margin is
+    /// a whole chunk beyond that: the last tiles *inside* the world are shaped and lit
+    /// from the ground around them, and that ground has to have been generated even
+    /// though it will never be drawn.
+    /// </summary>
+    private bool IsChunkBeyondThePoles(ChunkCoord coord)
+    {
+        int minV = coord.X * Chunk.Size + coord.Y * Chunk.Size;
+        int maxV = minV + 2 * (Chunk.Size - 1);
+        return maxV < -Chunk.Size || minV > Bounds.Span + Chunk.Size;
     }
 
     private static int FloorDiv(int a, int b) => (int)Math.Floor((double)a / b);

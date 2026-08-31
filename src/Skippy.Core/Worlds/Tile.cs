@@ -14,6 +14,10 @@ public enum Biome : byte
 {
     Ocean,
     ShallowWater,
+
+    /// <summary>Water with land all the way round it, and little enough of it to walk around — see <see cref="Generation.LakeFinder"/>.</summary>
+    Lake,
+
     Beach,
     Grassland,
     Savanna,
@@ -37,6 +41,7 @@ public static class BiomeNames
     {
         Biome.Ocean => "OCEAN",
         Biome.ShallowWater => "SHALLOWS",
+        Biome.Lake => "LAKE",
         Biome.Beach => "BEACH",
         Biome.Grassland => "GRASSLAND",
         Biome.Savanna => "SAVANNA",
@@ -47,6 +52,39 @@ public static class BiomeNames
         Biome.Jungle => "JUNGLE",
         Biome.Swamp => "SWAMP",
         _ => "ROCK",
+    };
+}
+
+/// <summary>
+/// Which tree owns a wood — the one that has the canopy, with a second kind
+/// growing through it in smaller numbers.
+///
+/// A real wood is not an even mix of everything that will grow there: one species
+/// takes the light and the rest live under it, which is why a pine wood a mile from
+/// an oak wood looks nothing like it. The name is the tree that dominates; "Mixed"
+/// means the second kind is close behind rather than the odd stranger among them.
+/// </summary>
+public enum ForestKind : byte
+{
+    Conifer,
+    ConiferMixed,
+    BroadleafMixed,
+    Broadleaf,
+    Palm,
+    PalmMixed,
+}
+
+public static class ForestNames
+{
+    /// <summary>Short upper-case label for the debug read-out, as <see cref="BiomeNames"/>.</summary>
+    public static string Name(this ForestKind kind) => kind switch
+    {
+        ForestKind.Conifer => "EVERGREEN",
+        ForestKind.ConiferMixed => "EVERGREEN-MIX",
+        ForestKind.BroadleafMixed => "BROADLEAF-MIX",
+        ForestKind.Broadleaf => "BROADLEAF",
+        ForestKind.Palm => "PALM",
+        _ => "PALM-MIX",
     };
 }
 
@@ -94,7 +132,33 @@ public struct Tile
     public Biome Biome;
     public Vegetation Vegetation;
 
-    public readonly bool IsWater => Biome is Biome.Ocean or Biome.ShallowWater;
+    /// <summary>Which tree owns the wood this tile stands in — see <see cref="Generation.Forests"/>.</summary>
+    public ForestKind Forest;
+
+    /// <summary>
+    /// Which of its kind's painted trees that wood is grown from, 0..1. A wood is not
+    /// only one kind of tree but, mostly, one *tree*: this picks its form out of the art
+    /// for that kind, so the pines in one valley are all the same pine and the next
+    /// valley's are all a different one.
+    /// </summary>
+    public float ForestVariant;
+
+    /// <summary>
+    /// This tile lies past a pole, outside the world (see <see cref="WorldBounds"/>).
+    /// It carries real terrain all the same — the last row of ground inside the world has
+    /// to be shaped and lit against genuine neighbours rather than against a wall of
+    /// nothing — but it is never drawn and nothing may walk onto it. What shows there is
+    /// the black beyond the edge of the map.
+    ///
+    /// False on a default tile, which is what an unloaded lookup returns, so code that
+    /// only cares about loaded ground reads the same as it always did.
+    /// </summary>
+    public bool IsVoid;
+
+    public readonly bool IsWater => Biome is Biome.Ocean or Biome.ShallowWater or Biome.Lake;
+
+    /// <summary>Water that is part of the sea, rather than a lake shut off from it.</summary>
+    public readonly bool IsSea => Biome is Biome.Ocean or Biome.ShallowWater;
 
     /// <summary>Temperature expressed in degrees Celsius (from the normalized 0..1 field).</summary>
     public readonly float TemperatureCelsius => WorldConstants.Celsius(Temperature);

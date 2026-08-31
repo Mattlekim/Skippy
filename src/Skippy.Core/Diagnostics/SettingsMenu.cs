@@ -106,10 +106,26 @@ public sealed class SettingsMenu : IDisposable
             Repeats = true,
         });
 
-        // The world dials: how warm it runs, how wet it runs, and how worn down it is. All
-        // three rebuild the map — they are baked into a tile at generation time, so the
-        // loaded chunks have to be thrown away for the change to mean anything (see
-        // World.Regenerate).
+        // The world dials: how big it is, how warm it runs, how wet it runs, and how worn
+        // down it is. All of them rebuild the map — they are baked into a tile at
+        // generation time, so the loaded chunks have to be thrown away for the change to
+        // mean anything (see World.Regenerate).
+        _rows.Add(new Row
+        {
+            Label = "WORLD SIZE",
+            Value = () => world.Settings.SizeName,
+            Step = dir =>
+            {
+                world.Settings.StepSize(dir);
+                world.Regenerate();
+
+                // A planet of a different size is a different planet. Where the camera
+                // stood on the old one says nothing about the new one, and on a smaller
+                // world it may be past a pole altogether.
+                world.CenterOnEquator();
+            },
+        });
+
         _rows.Add(new Row
         {
             Label = "TEMPERATURE",

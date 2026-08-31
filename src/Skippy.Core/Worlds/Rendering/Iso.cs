@@ -45,7 +45,7 @@ public static class Iso
     public const int MinTileWidth = 16;
     public const int MaxTileWidth = 512;
 
-    private static int _tileWidth = 312;
+    private static int _tileWidth = 128;
 
     /// <summary>
     /// Width of a tile diamond in iso pixels. Clamped to
