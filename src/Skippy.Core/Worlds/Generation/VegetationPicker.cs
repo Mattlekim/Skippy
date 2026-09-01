@@ -18,27 +18,31 @@ public static class VegetationPicker
 {
     /// <param name="clump">The clumping field at this tile, 0..1.</param>
     /// <param name="jitter">Per-tile noise-free variation, 0..1.</param>
-    public static Vegetation Pick(in Tile tile, float clump, float jitter)
+    public static PlantKind Pick(in Tile tile, float clump, float jitter)
     {
         if (tile.IsWater || tile.Biome == Biome.Beach)
-            return Vegetation.None;
+            return PlantKind.None;
 
         float d = clump;
         float r = jitter;
-        Vegetation tree = Forests.Primary(tile.Forest);
+        PlantKind tree = Forests.Primary(tile.Forest);
 
         return tile.Biome switch
         {
-            Biome.TemperateForest => d > 0.55f ? tree : r > 0.75f ? Vegetation.Bush : Vegetation.GrassTuft,
-            Biome.Taiga           => d > 0.52f ? tree : r > 0.82f ? Vegetation.Bush : Vegetation.None,
-            Biome.Jungle          => d > 0.42f ? tree : r > 0.55f ? Vegetation.Bush : Vegetation.GrassTuft,
-            Biome.Grassland       => d > 0.82f ? tree : r > 0.50f ? Vegetation.GrassTuft : Vegetation.None,
-            Biome.Savanna         => d > 0.86f ? tree : r > 0.60f ? Vegetation.GrassTuft : Vegetation.None,
+            // Flowers turn up in the temperate understory too, but sparingly — the odd
+            // patch where the canopy opens, not the meadow's carpet.
+            Biome.TemperateForest => d > 0.55f ? tree : r > 0.75f ? PlantKind.Bush : r > 0.62f ? PlantKind.Flowers : PlantKind.GrassTuft,
+            Biome.Taiga           => d > 0.52f ? tree : r > 0.82f ? PlantKind.Bush : PlantKind.None,
+            Biome.Jungle          => d > 0.42f ? tree : r > 0.55f ? PlantKind.Bush : PlantKind.GrassTuft,
+            // Grassland is where flowers belong: a good band of the open ground comes up
+            // flowering, the rest plain grass, with the odd tree where the clumping peaks.
+            Biome.Grassland       => d > 0.82f ? tree : r > 0.70f ? PlantKind.Flowers : r > 0.45f ? PlantKind.GrassTuft : PlantKind.None,
+            Biome.Savanna         => d > 0.86f ? tree : r > 0.60f ? PlantKind.GrassTuft : PlantKind.None,
             // Desert grows nothing: bare, shifting sand.
-            Biome.Tundra          => r > 0.90f ? Vegetation.Bush   : Vegetation.None,
-            Biome.Swamp           => d > 0.60f ? Vegetation.Bush   : r > 0.60f ? Vegetation.GrassTuft : Vegetation.None,
-            Biome.Rock            => r > 0.85f ? Vegetation.Rock   : Vegetation.None,
-            _                     => Vegetation.None,
+            Biome.Tundra          => r > 0.90f ? PlantKind.Bush   : PlantKind.None,
+            Biome.Swamp           => d > 0.60f ? PlantKind.Bush   : r > 0.60f ? PlantKind.GrassTuft : PlantKind.None,
+            Biome.Rock            => r > 0.85f ? PlantKind.Rock   : PlantKind.None,
+            _                     => PlantKind.None,
         };
     }
 }

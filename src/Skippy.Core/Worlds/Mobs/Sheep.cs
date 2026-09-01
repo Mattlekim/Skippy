@@ -37,6 +37,14 @@ public sealed class Sheep : Mob
     private const int TargetTries = 8;
 
     /// <summary>
+    /// How much forage a grazing sheep crops per world day. Set so a sheep working a tuft of
+    /// grass runs it down over a good part of a day — long enough that a patch is worth
+    /// stopping at, short enough that a flock left on one spot eats it bare and has to spread
+    /// out, which is what makes them drift across a meadow rather than huddle on one tile.
+    /// </summary>
+    private const float GrazeRatePerDay = 12f;
+
+    /// <summary>
     /// A sheep's body. It is a grazing animal built to eat almost constantly, so it feeds
     /// back far faster than it starves — a flock left alone stays fed, and hunger only
     /// becomes a problem for one that cannot get its head down.
@@ -80,6 +88,19 @@ public sealed class Sheep : Mob
             // A stopped sheep is a grazing sheep: this is where it eats and gets its rest,
             // which is why a flock left to itself never goes hungry.
             Activity = MobActivity.Feeding;
+
+            // ...and grazing actually eats the greenery underfoot: it takes a bite from the
+            // tile's forage, which runs the patch down as it goes (see WorldForage). On ground
+            // it has already cropped bare there is nothing left to take, so it gives up the
+            // spot early and moves on to look for better rather than standing on empty.
+            int tx = (int)MathF.Floor(Position.X), ty = (int)MathF.Floor(Position.Y);
+            if (world.TryGetTile(tx, ty, out Tile here))
+            {
+                float days = dt / MathF.Max(1f, world.Sky.DayLength);
+                float eaten = world.Forage.Graze(tx, ty, here.Vegetation, GrazeRatePerDay * days);
+                if (eaten <= 0f && world.Forage.Fullness(tx, ty) <= 0f)
+                    _rest = MathF.Min(_rest, Rand(0.2f, 0.6f));
+            }
 
             _rest -= dt;
             if (_rest <= 0f)

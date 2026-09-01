@@ -70,23 +70,23 @@ public static class Forests
     /// a wood with literally one species in it reads as wallpaper, and the odd stranger
     /// among the ranks is what makes the dominance look chosen instead of enforced.
     /// </summary>
-    public static void Mix(ForestKind kind, out Vegetation primary, out Vegetation secondary, out float primaryShare)
+    public static void Mix(ForestKind kind, out PlantKind primary, out PlantKind secondary, out float primaryShare)
     {
         (primary, secondary, primaryShare) = kind switch
         {
-            ForestKind.Conifer        => (Vegetation.PineTree, Vegetation.BroadleafTree, 0.88f),
-            ForestKind.ConiferMixed   => (Vegetation.PineTree, Vegetation.BroadleafTree, 0.62f),
-            ForestKind.BroadleafMixed => (Vegetation.BroadleafTree, Vegetation.PineTree, 0.62f),
-            ForestKind.Palm           => (Vegetation.PalmTree, Vegetation.BroadleafTree, 0.85f),
-            ForestKind.PalmMixed      => (Vegetation.PalmTree, Vegetation.BroadleafTree, 0.55f),
-            _                         => (Vegetation.BroadleafTree, Vegetation.PineTree, 0.88f),
+            ForestKind.Conifer        => (PlantKind.PineTree, PlantKind.BroadleafTree, 0.88f),
+            ForestKind.ConiferMixed   => (PlantKind.PineTree, PlantKind.BroadleafTree, 0.62f),
+            ForestKind.BroadleafMixed => (PlantKind.BroadleafTree, PlantKind.PineTree, 0.62f),
+            ForestKind.Palm           => (PlantKind.PalmTree, PlantKind.BroadleafTree, 0.85f),
+            ForestKind.PalmMixed      => (PlantKind.PalmTree, PlantKind.BroadleafTree, 0.55f),
+            _                         => (PlantKind.BroadleafTree, PlantKind.PineTree, 0.88f),
         };
     }
 
     /// <summary>The tree that owns a wood of this kind — the one a passer-by would name it after.</summary>
-    public static Vegetation Primary(ForestKind kind)
+    public static PlantKind Primary(ForestKind kind)
     {
-        Mix(kind, out Vegetation primary, out _, out _);
+        Mix(kind, out PlantKind primary, out _, out _);
         return primary;
     }
 

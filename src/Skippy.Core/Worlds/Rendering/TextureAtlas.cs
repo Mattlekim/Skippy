@@ -41,6 +41,9 @@ public sealed class TextureAtlas : IDisposable
     private const int TreeAtlasHeight = 112;
     private const int BushAtlasHeight = 72;
 
+    /// <summary>Ground cover — grass and flowers — is stored smaller: it draws only a few pixels tall.</summary>
+    private const int GrassAtlasHeight = 56;
+
     /// <summary>
     /// What still counts as backdrop card while flooding: near enough to one of the
     /// backdrop's own shades, and near enough to colourless. Measured off the sheets:
@@ -95,6 +98,14 @@ public sealed class TextureAtlas : IDisposable
     /// <summary>Leafy bushes, and bare twiggy ones.</summary>
     public IReadOnlyList<PlantArt> Bushes { get; }
     public IReadOnlyList<PlantArt> DeadBushes { get; }
+
+    /// <summary>
+    /// The painted ground cover cut from the plants sheet: grass tufts (its top row) and
+    /// flowering clumps (its second). Small billboards that carpet the open country — grass
+    /// everywhere it grows, flowers where the grassland comes into colour.
+    /// </summary>
+    public IReadOnlyList<PlantArt> Grasses { get; }
+    public IReadOnlyList<PlantArt> Flowers { get; }
 
     /// <summary>
     /// One plant's painted art together with the snow cap baked from it. The cap is a
@@ -159,6 +170,12 @@ public sealed class TextureAtlas : IDisposable
         // second sheet of their own.
         List<List<Cut>> trees = LoadSheet(gd, "Skippy.Assets.trees.png");
 
+        // The ground cover rides on its own sheet, already cut to transparency, its two rows
+        // grass then flowers — so it is loaded straight (no card to key out) and split by row.
+        List<List<Cut>> plants = LoadTransparentSheet(gd, "Skippy.Assets.plants.png");
+        List<Cut> grasses = plants.Count > 0 ? plants[0] : new List<Cut>();
+        List<Cut> flowers = plants.Count > 1 ? plants[1] : new List<Cut>();
+
         // The ground textures, cut from a plain grid (no card to key out), each wrapped
         // by a margin so the atlas gutter carries the opposite edge — that is what lets a
         // tile repeat seamlessly across the world under linear filtering.
@@ -180,9 +197,11 @@ public sealed class TextureAtlas : IDisposable
         List<Piece> palmArt = Resample(palms, TreeAtlasHeight);
         List<Piece> bushArt = Resample(leafy, BushAtlasHeight);
         List<Piece> deadBushArt = Resample(deadBushes, BushAtlasHeight);
+        List<Piece> grassArt = Resample(grasses, GrassAtlasHeight);
+        List<Piece> flowerArt = Resample(flowers, GrassAtlasHeight);
 
         var all = new List<Piece> { white, disc, softDisc, sheep };
-        foreach (List<Piece> set in new[] { deadTreeArt, broadleafArt, coniferArt, palmArt, bushArt, deadBushArt })
+        foreach (List<Piece> set in new[] { deadTreeArt, broadleafArt, coniferArt, palmArt, bushArt, deadBushArt, grassArt, flowerArt })
         {
             BakeCaps(set);      // every plant gets a snow cap baked off its own pixels...
             AddWithCaps(all, set); // ...packed next to it
@@ -215,6 +234,9 @@ public sealed class TextureAtlas : IDisposable
         // A sheet with no palms on it falls back to the broadleaves, as it used to.
         List<PlantArt> palmSet = Art(palmArt, atlasWidth, atlasHeight);
         Palms = palmSet.Count > 0 ? palmSet : Broadleaves;
+
+        Grasses = Art(grassArt, atlasWidth, atlasHeight);
+        Flowers = Art(flowerArt, atlasWidth, atlasHeight);
     }
 
     /// <summary>
@@ -410,6 +432,25 @@ public sealed class TextureAtlas : IDisposable
         sheet.GetData(pixels);
 
         KeyOutBackground(pixels, sheet.Width, sheet.Height);
+        Premultiply(pixels);
+        return Segment(pixels, sheet.Width, sheet.Height);
+    }
+
+    /// <summary>
+    /// As <see cref="LoadSheet"/>, but for a sheet that already carries its own
+    /// transparency — the plants sheet is exported cut out, so there is no backdrop card to
+    /// flood away. Everything else is the same: it is premultiplied and then segmented into
+    /// row bands by the gaps between the sprites, so the sheet's rows come back in order.
+    /// </summary>
+    private static List<List<Cut>> LoadTransparentSheet(GraphicsDevice gd, string resource)
+    {
+        using Stream stream = typeof(TextureAtlas).Assembly.GetManifestResourceStream(resource)
+            ?? throw new InvalidOperationException($"Embedded asset '{resource}' is missing.");
+
+        using Texture2D sheet = Texture2D.FromStream(gd, stream);
+        var pixels = new Color[sheet.Width * sheet.Height];
+        sheet.GetData(pixels);
+
         Premultiply(pixels);
         return Segment(pixels, sheet.Width, sheet.Height);
     }

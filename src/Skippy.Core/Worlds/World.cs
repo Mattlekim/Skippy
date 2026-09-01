@@ -105,6 +105,13 @@ public class World
     public IReadOnlyList<Mob> Mobs => _mobs;
 
     /// <summary>
+    /// The world's grazeable greenery — how much food is left in each patch a mob has eaten
+    /// from, and growing back where it has been left alone. Animals feed from this; see
+    /// <see cref="Items.WorldForage"/>.
+    /// </summary>
+    public Items.WorldForage Forage { get; } = new();
+
+    /// <summary>
     /// The mob the player has clicked on, if any. It is drawn standing in a pool of light and
     /// its vitals go up on the read-out; nothing else about it changes.
     /// </summary>
@@ -245,6 +252,10 @@ public class World
     protected virtual void UpdateMobs(float dt)
     {
         SpawnStarterFlock();
+
+        // Greenery grows back on the same day-clock the animals live on, so a grazed meadow
+        // recovers at the same pace whatever the day length is set to.
+        Forage.Advance(dt / MathF.Max(1f, Sky.DayLength));
 
         foreach (Mob mob in _mobs)
             mob.Update(this, dt);
@@ -412,6 +423,7 @@ public class World
 
         _chunks.Clear();
         _mobs.Clear();
+        Forage.Clear();
         SelectedMob = null;
         _flockSpawned = false;
 
