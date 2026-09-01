@@ -221,6 +221,10 @@ public sealed class ChunkMesher
     private const float TreeHeight = 34f;
     private const float BushHeight = 16f;
 
+    /// <summary>How tall painted grass tufts and flower clumps stand, in iso pixels (before size jitter).</summary>
+    private const float GrassHeight = 11f;
+    private const float FlowerHeight = 13f;
+
     /// <summary>How much taller than a broadleaf a palm stands — most of it is trunk.</summary>
     private const float PalmHeight = 1.25f;
 
@@ -292,7 +296,7 @@ public sealed class ChunkMesher
     private readonly struct VegItem
     {
         public readonly Vector2 Pos;
-        public readonly Vegetation Veg;
+        public readonly PlantKind Veg;
         public readonly float Scale;
 
         /// <summary>Dead: no foliage, just bare wood.</summary>
@@ -311,7 +315,7 @@ public sealed class ChunkMesher
         /// </summary>
         public readonly float Variant;
 
-        public VegItem(Vector2 pos, Vegetation veg, float scale, bool dead, uint seed, float snow, float variant)
+        public VegItem(Vector2 pos, PlantKind veg, float scale, bool dead, uint seed, float snow, float variant)
         {
             Pos = pos;
             Veg = veg;
@@ -1785,7 +1789,7 @@ public sealed class ChunkMesher
         // tiles" is a rate, not a number. Rounding that would lose it entirely, so
         // the remainder is settled with a coin toss: a rate of 0.05 puts a tree on
         // one tile in twenty, at any tile size.
-        void Add(Vegetation kind, float rate, float deadChance = 0f)
+        void Add(PlantKind kind, float rate, float deadChance = 0f)
         {
             float exact = rate * area * (IsTree(kind) ? treeDensity : 1f);
             int n = (int)exact;
@@ -1836,7 +1840,7 @@ public sealed class ChunkMesher
         // the tile happens to be planted.
         void AddTrees(float rate, float deadChance)
         {
-            Forests.Mix(forest, out Vegetation primary, out Vegetation secondary, out float share);
+            Forests.Mix(forest, out PlantKind primary, out PlantKind secondary, out float share);
             Add(primary, rate * share, deadChance);
             Add(secondary, rate * (1f - share), deadChance);
         }
@@ -1848,45 +1852,55 @@ public sealed class ChunkMesher
         {
             case Biome.TemperateForest:
                 AddTrees(5 + Ri(dens * 6), deadChance: 0.07f);
-                Add(Vegetation.Bush, Ri(dens * 2));
-                Add(Vegetation.Rock, RockRateForest);
+                Add(PlantKind.Bush, Ri(dens * 2));
+                Add(PlantKind.Rock, RockRateForest);
+                // A thin floor of grass under the trees, and the rare flowering patch where
+                // the canopy opens — far less than the meadows carry.
+                Add(PlantKind.GrassTuft, GrassRateForest);
+                Add(PlantKind.Flowers, FlowerRateForest);
                 break;
             case Biome.Taiga:
                 AddTrees(5 + Ri(dens * 6), deadChance: 0.10f);
                 // Undergrowth is sparse in the cold: only the odd frost-bitten shrub.
-                if (rng.Next() > 0.9f) Add(Vegetation.Bush, 1, deadChance: 0.5f);
-                Add(Vegetation.Rock, RockRateForest);
+                if (rng.Next() > 0.9f) Add(PlantKind.Bush, 1, deadChance: 0.5f);
+                Add(PlantKind.Rock, RockRateForest);
                 break;
             case Biome.Jungle:
                 AddTrees(6 + Ri(dens * 6), deadChance: 0.04f);
-                Add(Vegetation.Bush, 1 + Ri(dens * 2));
+                Add(PlantKind.Bush, 1 + Ri(dens * 2));
+                Add(PlantKind.GrassTuft, GrassRateForest);
                 break;
             case Biome.Grassland:
                 // A lone tree here and there across open grass, thickening into light
                 // woodland where the clumping field peaks. This used to be a hard
                 // switch at dens 0.5 — half the grassland bare, half of it a forest.
                 AddTrees(0.05f + 0.7f * MathF.Max(0f, dens - 0.5f), deadChance: 0.09f);
-                if (dens > 0.35f && rng.Next() > 0.5f) Add(Vegetation.Bush, 1);
-                Add(Vegetation.Rock, RockRateGrassland);
+                if (dens > 0.35f && rng.Next() > 0.5f) Add(PlantKind.Bush, 1);
+                Add(PlantKind.Rock, RockRateGrassland);
+                // Grass and flowers are grassland's own: dense grass everywhere, with flowers
+                // coming up through it where the ground is a little richer.
+                Add(PlantKind.GrassTuft, GrassRateGrassland * (0.5f + dens));
+                Add(PlantKind.Flowers, FlowerRateGrassland * (0.4f + dens));
                 break;
             case Biome.Savanna:
                 if (dens > 0.55f) AddTrees(dens > 0.8f ? 2 : 1, deadChance: 0.18f);
+                Add(PlantKind.GrassTuft, GrassRateSavanna);
                 break;
             case Biome.Swamp:
-                Add(Vegetation.Bush, 1 + Ri(dens * 3), deadChance: 0.25f);
+                Add(PlantKind.Bush, 1 + Ri(dens * 3), deadChance: 0.25f);
                 if (dens > 0.6f) AddTrees(1, deadChance: 0.30f);
                 break;
             case Biome.Tundra:
                 // Nothing up here keeps a leaf: tundra scrub is bare twigs, always —
                 // and thin on the ground, only the rare hardy shrub in the frost. What it
                 // does have is stone — frost-heaved rock breaking through the thin soil.
-                if (rng.Next() > 0.92f) Add(Vegetation.Bush, 1, deadChance: 1f);
-                Add(Vegetation.Rock, RockRateTundra);
+                if (rng.Next() > 0.92f) Add(PlantKind.Bush, 1, deadChance: 1f);
+                Add(PlantKind.Rock, RockRateTundra);
                 break;
             // Desert grows nothing at all: shifting sand carries no scattered rock, and
             // dune country is bare sand rather than the cartoon cactus flat.
             // The mountains are made of the stuff: rock thickly over the bare peaks.
-            case Biome.Rock: Add(Vegetation.Rock, RockRateMountain); break;
+            case Biome.Rock: Add(PlantKind.Rock, RockRateMountain); break;
         }
     }
 
@@ -1950,10 +1964,10 @@ public sealed class ChunkMesher
     /// <summary>The ground radius (iso pixels) of a plant's shadow, or 0 for none.</summary>
     private static float ShadowRadius(in VegItem item) => item.Veg switch
     {
-        Vegetation.BroadleafTree or Vegetation.PalmTree or Vegetation.PineTree
+        PlantKind.BroadleafTree or PlantKind.PalmTree or PlantKind.PineTree
             => TreeHeight * 0.30f * item.Scale,
-        Vegetation.Bush => BushHeight * 0.42f * item.Scale,
-        Vegetation.Rock => 6f * item.Scale,
+        PlantKind.Bush => BushHeight * 0.42f * item.Scale,
+        PlantKind.Rock => 6f * item.Scale,
         _ => 0f, // grass tufts are too slight to cast one
     };
 
@@ -1970,8 +1984,8 @@ public sealed class ChunkMesher
     /// </summary>
     private static float ShadowLean(in VegItem item, float radius) => radius * (item.Veg switch
     {
-        Vegetation.Rock => 0.45f,
-        Vegetation.Bush => 0.70f,
+        PlantKind.Rock => 0.45f,
+        PlantKind.Bush => 0.70f,
         _ => 1f, // trees
     });
 
@@ -2011,6 +2025,18 @@ public sealed class ChunkMesher
     private const float RockRateGrassland = 0.03f; // very low — a lone boulder in open country
 
     /// <summary>
+    /// How thickly grass and flowers are strewn, per base-sized tile. Grassland is where
+    /// both belong — dense grass with flowers coming through it — and the woods carry a
+    /// thinner scatter of each in whatever light reaches the floor. Rates, settled with a
+    /// coin toss below one whole plant, so they hold at any tile size.
+    /// </summary>
+    private const float GrassRateGrassland = 6f;
+    private const float GrassRateSavanna = 3f;
+    private const float GrassRateForest = 2f;      // sparse ground cover under the canopy
+    private const float FlowerRateGrassland = 1.6f;
+    private const float FlowerRateForest = 0.25f;  // "less prominent in forests" — the odd patch
+
+    /// <summary>
     /// Emits one plant as atlas-textured quads. Sizes are in iso pixels, scaled by
     /// the plant's own <see cref="VegItem.Scale"/>.
     ///
@@ -2026,27 +2052,32 @@ public sealed class ChunkMesher
 
         switch (item.Veg)
         {
-            case Vegetation.GrassTuft: GrassTuft(at, s, ref rng); break;
+            case PlantKind.GrassTuft: Grass(at, s, item.Snow, ref rng); break;
 
-            case Vegetation.Bush:
+            // A clump of flowers, painted like any other plant — grassland's colour.
+            case PlantKind.Flowers:
+                Plant(at, s, _atlas.Flowers, FlowerHeight, item.Snow, ref rng);
+                break;
+
+            case PlantKind.Bush:
                 Plant(at, s, item.Dead ? _atlas.DeadBushes : _atlas.Bushes, BushHeight, item.Snow, ref rng);
                 break;
 
-            case Vegetation.PineTree:
+            case PlantKind.PineTree:
                 Tree(at, s, item, _atlas.Conifers, TreeHeight, ref rng);
                 break;
 
-            case Vegetation.BroadleafTree:
+            case PlantKind.BroadleafTree:
                 Tree(at, s, item, _atlas.Broadleaves, TreeHeight, ref rng);
                 break;
 
             // Palms stand taller than the broadleaves beside them — they are mostly
             // trunk, so drawn to the same height their crowns come out tiny.
-            case Vegetation.PalmTree:
+            case PlantKind.PalmTree:
                 Tree(at, s, item, _atlas.Palms, TreeHeight * PalmHeight, ref rng);
                 break;
 
-            case Vegetation.Rock: Rock(at, s, ref rng); break;
+            case PlantKind.Rock: Rock(at, s, ref rng); break;
         }
     }
 
@@ -2143,6 +2174,21 @@ public sealed class ChunkMesher
     /// </summary>
     private const float SnowSecondCoat = 0.55f;
 
+    /// <summary>
+    /// A painted grass tuft off the plants sheet, or — should that sheet be missing — the
+    /// old hand-drawn blades below, so the world is never bare of grass whatever art it has.
+    /// </summary>
+    private void Grass(Vector2 at, float s, float snow, ref XorShift rng)
+    {
+        if (_atlas.Grasses.Count == 0)
+        {
+            GrassTuft(at, s, ref rng);
+            return;
+        }
+        Plant(at, s, _atlas.Grasses, GrassHeight, snow, ref rng);
+    }
+
+    /// <summary>A few hand-drawn blades — the fallback when no painted grass is loaded.</summary>
     private void GrassTuft(Vector2 at, float s, ref XorShift rng)
     {
         Color blade = Vary(GrassBlade, ref rng);
@@ -2301,8 +2347,8 @@ public sealed class ChunkMesher
     private static int Ri(float x) => (int)MathF.Round(x);
 
     /// <summary>The canopy species — the ones that thin out at a biome's edge.</summary>
-    private static bool IsTree(Vegetation veg)
-        => veg is Vegetation.PineTree or Vegetation.BroadleafTree or Vegetation.PalmTree;
+    private static bool IsTree(PlantKind veg)
+        => veg is PlantKind.PineTree or PlantKind.BroadleafTree or PlantKind.PalmTree;
 
     /// <summary>Clamped smoothstep, so the fade has no hard edge where it begins.</summary>
     private static float Smoothstep01(float t)

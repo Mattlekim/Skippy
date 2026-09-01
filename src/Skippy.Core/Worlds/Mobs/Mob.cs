@@ -5,7 +5,7 @@ namespace Skippy.Core.Worlds.Mobs;
 
 /// <summary>
 /// Which art a mob is drawn with. The renderer switches on this exactly the way it
-/// switches on <see cref="Vegetation"/> for plants, so a mob class stays pure
+/// switches on <see cref="PlantKind"/> for plants, so a mob class stays pure
 /// behaviour and knows nothing about the atlas it ends up in.
 /// </summary>
 public enum MobKind : byte

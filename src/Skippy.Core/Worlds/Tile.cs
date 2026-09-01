@@ -88,8 +88,13 @@ public static class ForestNames
     };
 }
 
-/// <summary>What (if anything) grows on a tile. Chosen from biome + climate.</summary>
-public enum Vegetation : byte
+/// <summary>
+/// What (if anything) grows on a tile, in the sense of which <em>art</em> it is drawn
+/// from. Chosen from biome + climate. What that thing then <em>is</em> to the rest of the
+/// world — food or material, and how much food — is its <see cref="Items.WorldItem"/>,
+/// mapped from this in <see cref="Items.WorldItems"/>.
+/// </summary>
+public enum PlantKind : byte
 {
     None,
     GrassTuft,
@@ -98,6 +103,10 @@ public enum Vegetation : byte
     BroadleafTree,
     PalmTree,
     Rock,
+
+    /// <summary>A clump of flowering plants — grassland's colour, and grazeable like grass.
+    /// Appended rather than slotted next to the grass so the older members keep their values.</summary>
+    Flowers,
 }
 
 /// <summary>
@@ -137,7 +146,9 @@ public struct Tile
     public float Clearing;
 
     public Biome Biome;
-    public Vegetation Vegetation;
+
+    /// <summary>Which plant this tile grows, for its art — see <see cref="PlantKind"/>.</summary>
+    public PlantKind Vegetation;
 
     /// <summary>Which tree owns the wood this tile stands in — see <see cref="Generation.Forests"/>.</summary>
     public ForestKind Forest;
