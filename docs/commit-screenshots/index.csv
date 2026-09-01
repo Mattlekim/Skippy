@@ -1,0 +1,56 @@
+idx,hash,status,subject
+1,d3b4e9976ecc76254f70a9c512d36f2802ce86f0,build_failed,Scaffold MonoGame multi-platform architecture (PC Android browser)
+2,f3c1d52ab94f45a23669be527a2ad045050badc9,ok,Add .NET SessionStart hook; fix & verify KNI browser build end-to-end
+3,0edefc000496a7674d3dc2a1ef50b9b8442da657,ok,Add isometric chunked world engine (terrain biomes vegetation)
+4,6ee65dec8e13ac73bb21d22a5ba5ae2741b662ec,ok,Smooth AoE2-style terrain + temperature in degrees
+5,8d4ae0ca35fbdfeb1445f0a1ec318b2410c594d5,ok,Add slope lighting and per-tile color variation to terrain
+6,0837bdb085dc8f1cb749656966b36b42a1103829,ok,Bigger tiles and AoE2-style multi-tree scatter
+7,469946d2cb9f46a18e9b6c2815fbc7445baebf17,ok,Blend terrain across tile edges (no hard biome borders)
+8,5c0d068a92a603f5c9645335da82d7f9a5466408,ok,Painted plant art rivers shoreline surf and a climate rebalance
+9,c34fea9c1a885bcaa64037e5925df83c30539e84,ok,Merge PR #1: MonoGame multi-platform setup + isometric world engine
+10,e2b59f5c3820164d8823441664def024a0c0510a,ok,CI: fix web/Android jobs (storage + EOL SDK)
+11,894ab39e1e0721605d5e5494dc6b80fa0cfa966a,ok,Merge PR #2: CI fixes for web/Android jobs
+12,751b3def2bfdc3ae000458f3e56ae53a16bf1e3d,ok,CI: opt out of EOL-workload check for Android build
+13,2be08481c7ff5ef91e0d8c4f9537b0990a75ed55,ok,Merge PR #3: Android EOL-workload CI fix
+14,dec2191d0ca1885704fefdff0f289b4b60a48888,ok,CI: deploy Pages via gh-pages branch (no Actions storage)
+15,7ebdff0e7853b28ca30e9c7403be0d152eef6905,ok,Merge PR #4: storage-free gh-pages deploy
+16,1bf0bbdcddd32373afc641da0dccd5646bde320d,ok,CI: pin Android job to .NET 8 SDK
+17,cb8e8809cb55566f99f635191de4a1ac4314ef37,ok,Merge PR #5: pin Android CI to .NET 8 SDK
+18,b381a838beda2e1beeb2ec1ed36454aa8d222192,ok,CI: fix YAML parse error in Android SDK-pin step
+19,8d7c90a8470ab2bd72600ac1aecb972cdb03dfca,ok,Merge PR #6: fix workflow YAML parse error
+20,06301df0250bcc4d318f741b2020aaf4a24ad2b8,ok,Android: drop missing ic_launcher icon reference
+21,d0a06e80fcedb3c4ff03c60f3a2cb6ae330725b8,ok,Merge PR #7: fix Android launcher-icon build error
+22,655d99953c826077da9816c5f17d050a265ca7dd,ok,Forest floor texture denser forest cores fewer frost bushes
+23,ebd8a7a85b8a51dd59803e7c397919c3ca0fe70b,ok,Merge PR #8: forest floor denser cores fewer frost bushes
+24,bd67361c78941613eb8b4a9e08e49600e168496d,ok,Add mountains and cliffs to terrain generation (#9)
+25,597196e4debc7dc3a6464cc512913ce47347b36d,ok,Tilt the camera back and add ground shadows (#10)
+26,354e0318ac4a2e9d5625d157010eddb2bdc808b1,ok,Give high elevation layers more vertical definition (#11)
+27,0f7521499d483a8a2f1fc0d99fde81b4e6566978,ok,Light the world with a moving sun and add clouds and cloud shadows (#12)
+28,5b7e35c6fab95d4d949b02fd1a719cffd9e605e3,ok,Ease the height step between elevation levels (#13)
+29,0d6c360f57f0ac5391855c2d4ecb8fe4c5d7691d,ok,Quarter the height step quadruple the elevation levels (#14)
+30,3c31e3e8d1583c601cbdf52e198fd13555cc8bad,ok,Subdivide land tiles and smooth the height between corners (#15)
+31,74bd6dc025e88ce037279cec08cfee02cd86bdbd,ok,Texture the ground with painted per-biome tiles (#16)
+32,a4a15525551a16f51addd2e93e3a0e9064fff67e,ok,Blend ground textures where biomes meet (#17)
+33,564bef91fe5370909cd155b4a48b690fbf5dd0f8,ok,Erode the coastline instead of fading the shore (#18)
+34,c6db8910a662b83250c8e34888141a8c6ad06d42,ok,Round the shore by cutting coastal tiles along the waterline (#19)
+35,6c5d9945f438393e01a447b9dc271ddd4472c5d6,ok,Blend biomes along the climate contour like the shore (#20)
+36,ef59401e319572dbd00b2bcdbc283df4eb033617,ok,Fix broken coasts after the biome-blend change (#21)
+37,8d43b3fa5028a212ce8d47155027e6356424ca1d,ok,Blend the land on shore tiles too not just cut the water (#22)
+38,17dc69c8f0446987772588ac9de5f4e9e18520e2,ok,Soft-blend biome textures so edge-aligned borders blend too (#23)
+39,2f314641d44ccc7994ca2f4595cfd12e770c697b,ok,Remove T-junction seams by subdividing all land tiles equally (#24)
+40,273412313e9079b0d92aab22ef97615d2b03d547,ok,Add procedural climate-driven snow overlay
+41,df5b82257477feb79f83e4f3acd575cb8d31dfe1,ok,Cap trees and bushes with snow to match the ground
+42,18040140b41e9ab50a999cf159d468bc8b993358,ok,Procedural climate-driven snow on ground and plants (#25)
+43,5c2f393570f73e5b1dce525756e3c2c029e2305a,ok,fixesc
+44,ec23d7f03fff0456387bafe4d41ae69f755411c8,ok,Merge remote-tracking branch 'origin/claude/monogame-multiplatform-setup-tfu99d'
+45,a935606cc21e06863ed03b75ab73ff846e3d522e,ok,Prototype: depth-tested foliage and mobs (toggle B)
+46,7535b6d907f9477cae9e02872ab19de5c5e8ab9c,ok,Merge pull request #26 from Mattlekim/claude/trees-bushes-3d-performance-wkh18i
+47,f8211c40cfee4476d94bde63a4d82e03c1c20c50,ok,Clouds: high sky seen only when zoomed out gusty wind kept shadows
+48,e053c54576611644fde308c46b7ffb76e004e581,build_failed,Simpler flatter ground grey rock mountains scattered 3D rocks
+49,a6a9031d4a0e69f33a3a9a6b539e314aef4b3a44,build_failed,Merge pull request #27 from Mattlekim/claude/high-clouds-wind-shadows-yloljk
+50,795eb6ffdff78cc91033568ba3d58e4c7c8407ff,ok,Make the world a wrapping planet with poles
+51,bcb1b56b6080af6054ff0a23acc52ab42f4d1f94,ok,Merge origin/main (PR #27) into the wrapping-planet branch
+52,1d97bdbcc061c1af83e521426ec1ca423b2e2cb0,ok,A wrapping planet with poles and an Earth-banded climate (#28)
+53,01e390a7265809fcf2c846dd24d9d6316d7575e8,ok,fixes
+54,fb934e23ce7866249dbb03a3516452ae0f1bce89,ok,work on world gen
+55,b4cd2f712d2594a98b96f71f05639cafb113b213,ok,multithreading chunk gen
